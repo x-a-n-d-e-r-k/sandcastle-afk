@@ -24,9 +24,9 @@ There is **no CI gate** by default — the reviewer's independent preflight re-r
 ## Quickstart
 
 ```bash
-# 1. Get the tooling into YOUR repo (it runs inside the target repo)
-npx degit x-a-n-d-e-r-k/sandcastle-afk afk-tmp && cp -r afk-tmp/{.sandcastle,bin,skills,scripts} . && rm -rf afk-tmp
-#    then add the deps + scripts from this repo's package.json to yours.
+# 1. From the root of YOUR repo, drop the tooling in (one command):
+curl -fsSL https://raw.githubusercontent.com/x-a-n-d-e-r-k/sandcastle-afk/main/bootstrap.sh | bash
+npm install   # (or pnpm / yarn)
 
 # 2. Detect the stack, render the Dockerfile, install the skill
 npm run afk:init           # review afk.config.json — especially `preflight`
