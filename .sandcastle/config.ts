@@ -13,6 +13,7 @@ if (!existsSync(CONFIG_PATH)) {
 
 export type Cfg = {
   platform: "github" | "gitlab";
+  reviewMode: "internal" | "external";
   defaultBranch: string;
   packageManager: string;
   packageManagerVersion: string;

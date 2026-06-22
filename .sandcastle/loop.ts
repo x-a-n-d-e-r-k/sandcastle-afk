@@ -15,7 +15,8 @@ const DRY = !!process.env.AFK_DRY_RUN;
 const L = cfg.labels;
 
 type Issue = { number: number; title: string; labels: string[] };
-type PR = { number: number; headRef: string; reviewState: string; labels: string[] };
+type PR = { number: number; headRef: string; reviewState: string; labels: string[]; merged?: boolean };
+const EXTERNAL = cfg.reviewMode === "external";
 
 // --- usage-limit guard (best-effort patterns; tune on first real limit) -----
 const USAGE_PATTERNS = [
@@ -87,16 +88,23 @@ function escalate(pr: number) {
 function pickNextIssue(allPRs: PR[]): Issue | undefined {
   const issues = forgeJSON<Issue[]>(`issue-list --label ${L.ready}`);
   const openHeads = new Set(allPRs.map((p) => p.headRef));
+  // A closed-but-unmerged PR means its issue was rejected by closing — don't re-dispatch it.
+  const rejected = new Set(
+    forgeJSON<PR[]>("pr-list --state closed")
+      .filter((p) => !p.merged && p.headRef.startsWith("agent/issue-"))
+      .map((p) => p.headRef),
+  );
   return issues
     .filter((i) => !isExcluded(i.labels))
     .filter((i) => !openHeads.has(`agent/issue-${i.number}`))
+    .filter((i) => !rejected.has(`agent/issue-${i.number}`))
     .sort((a, b) => {
       const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
       return s(a.title) - s(b.title) || a.number - b.number;
     })[0];
 }
 
-log(`AFK loop starting (concurrency 1, platform ${cfg.platform}${DRY ? ", DRY-RUN" : ""}). Ctrl-C to stop.`);
+log(`AFK loop starting (concurrency 1, platform ${cfg.platform}, review ${cfg.reviewMode}${DRY ? ", DRY-RUN" : ""}). Ctrl-C to stop.`);
 while (true) {
   try {
     sh(`git fetch origin ${cfg.defaultBranch}`);
@@ -115,9 +123,8 @@ while (true) {
       const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
 
       if (pr.reviewState === "APPROVED") {
-        log(`PR #${pr.number} APPROVED -> merging`);
-        forge(`pr-merge ${pr.number} --squash --delete-branch`);
-        log(`merged #${pr.number}`);
+        if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleep(POLL_MS); }
+        else { log(`PR #${pr.number} APPROVED -> merging`); forge(`pr-merge ${pr.number} --squash --delete-branch`); log(`merged #${pr.number}`); }
       } else if (pr.reviewState === "CHANGES_REQUESTED") {
         const heals = Number(forge(`pr-changes-count ${pr.number}`)) || 0;
         if (heals >= MAX_HEAL) {
@@ -129,13 +136,12 @@ while (true) {
           await runGuarded(healOpts(pr.number, branch, issue));
           forge(`pr-clear-changes ${pr.number}`);
           syncBranch(branch);
-          log(`re-reviewing #${pr.number}`);
-          await runGuarded(reviewOpts(pr.number, branch, issue));
+          if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
+          else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
         }
       } else {
-        log(`PR #${pr.number} needs review -> reviewing`);
-        syncBranch(branch);
-        await runGuarded(reviewOpts(pr.number, branch, issue));
+        if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleep(POLL_MS); }
+        else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
       }
     } else {
       const next = pickNextIssue(all);

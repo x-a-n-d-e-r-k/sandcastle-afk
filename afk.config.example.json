@@ -1,5 +1,6 @@
 {
   "platform": "github",
+  "reviewMode": "internal",
   "defaultBranch": "main",
   "packageManager": "pnpm",
   "packageManagerVersion": "9.15.4",

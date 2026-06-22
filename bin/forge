@@ -132,14 +132,14 @@ case "$verb" in
 
   pr-list)
     if [[ "$PLATFORM" == github ]]; then
-      gh pr list --state "$state" --json number,headRefName,reviewDecision,labels --limit 100 \
-        | jq '[.[] | {number, headRef: .headRefName,
+      gh pr list --state "$state" --json number,headRefName,reviewDecision,labels,state --limit 100 \
+        | jq '[.[] | {number, headRef: .headRefName, merged: (.state == "MERGED"),
               reviewState: (.reviewDecision | if . == "" or . == null then "REVIEW_REQUIRED" else . end),
               labels: [.labels[].name]}]'
     else
       # VERIFY: derive review state from approvals + the changes-requested label
       glab mr list --state "$state" -F json | jq --arg cr "$CHANGES_LABEL" '
-        [.[] | {number: .iid, headRef: .source_branch, labels: (.labels // []),
+        [.[] | {number: .iid, headRef: .source_branch, merged: (.state == "merged"), labels: (.labels // []),
           reviewState: (
             if ((.labels // []) | index($cr)) then "CHANGES_REQUESTED"
             elif (.approved == true or (.approvals_left // 1) == 0) then "APPROVED"
@@ -225,13 +225,20 @@ case "$verb" in
       git config --global credential.helper '!f() { echo username=oauth2; echo "password=${GITLAB_TOKEN:-$GLAB_TOKEN}"; }; f'
     fi ;;
 
-  pr-feedback)  # latest "changes requested" feedback text, for the heal step
+  pr-feedback)  # ALL reviewer feedback (review summaries + inline threads + comments), for heal
     [[ -n "$NUM" ]] || die "pr-feedback needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      gh pr view "$NUM" --json reviews | jq -r '[.reviews[] | select(.state=="CHANGES_REQUESTED")] | last | .body // "(no feedback body)"'
+      {
+        gh pr view "$NUM" --json reviews \
+          | jq -r '.reviews[] | select((.body // "") != "") | "### review by \(.author.login) [\(.state)]\n\(.body)\n"'
+        gh api "repos/{owner}/{repo}/pulls/${NUM}/comments" 2>/dev/null \
+          | jq -r '.[] | "### inline @ \(.path):\(.line // .original_line) (\(.user.login))\n\(.body)\n"' 2>/dev/null || true
+        gh pr view "$NUM" --json comments \
+          | jq -r '.comments[] | "### comment by \(.author.login)\n\(.body)\n"'
+      }
     else
       glab mr note list "$NUM" -F json 2>/dev/null \
-        | jq -r '[.[] | select(.body | startswith("[forge:changes-requested]"))] | last | .body // "(no feedback)"'
+        | jq -r '.[] | select((.system // false) | not) | "### note by \(.author.username // "?")\n\(.body)\n"'
     fi ;;
 
   *) die "unknown verb '$verb'. See bin/forge for the verb list." ;;

@@ -59,6 +59,20 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 `platform`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
 
+## Review modes
+
+`reviewMode` in `afk.config.json`:
+
+- **`internal`** (default) — the loop runs its own independent AI reviewer (different model + identity) and merges on approval. Fully self-contained.
+- **`external`** — an outside process (your own review pipeline, a human, a team) owns review and merge. The loop dispatches, opens the PR/MR, then **waits**: it never runs its own reviewer and never merges. It only reacts to a structured signal:
+  - **changes requested** (a GitHub *Request changes* review, or the `changes-requested` label on GitLab) → the loop **heals**: it reads *all* the review feedback (summaries, inline threads, comments), fixes on the branch, pushes, and clears the signal so your process re-reviews. Capped at `maxHeal`, then parked as `needs-human`.
+  - **approved** → the loop does nothing and waits for your process to merge.
+  - on merge (by anyone) → the PR leaves the open list and the loop dispatches the next issue.
+
+  Plain comments alone are **not** a trigger — your process must emit the changes-requested signal. A PR closed *without* merging parks its issue (the loop won't re-dispatch it).
+
+The loop is stateless across cycles — it re-derives everything from open PRs + ready issues each poll — so an external merge is detected automatically with no special handling.
+
 ## File map
 
 ```

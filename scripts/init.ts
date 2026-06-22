@@ -36,7 +36,7 @@ const preflight = ["lint", "typecheck", "test", "test:integration"].filter((s) =
 const e2e = scripts["test:e2e"] ? run("test:e2e") : "";
 
 const cfg = {
-  platform, defaultBranch, packageManager: pm, packageManagerVersion: pmVersion, dockerBaseImage,
+  platform, reviewMode: "internal", defaultBranch, packageManager: pm, packageManagerVersion: pmVersion, dockerBaseImage,
   install, preflight: preflight.length ? preflight : [run("test")], e2e, imageName: "sandcastle-afk",
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
