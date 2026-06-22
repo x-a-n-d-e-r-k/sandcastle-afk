@@ -72,9 +72,25 @@ caffeinate -i npm run afk:loop   # keep the machine awake; Ctrl-C to stop
 
 Feed it `agent-ready` issues; it works one at a time. A PR that fails to converge after `maxHeal` heals gets the `needs-human` label and is parked.
 
-## GitLab — verify these before trusting it
+## External review mode (`reviewMode: "external"`)
 
-The GitLab backend in `bin/forge` is best-effort. On your instance, confirm: `glab issue list -F json` / `glab mr list -F json` field names (`iid`, `source_branch`, `labels`, approval fields); that `pr-list`'s review-state derivation matches your approval setup; and the `changes-requested` label flow for heal. These are marked `# VERIFY` in `bin/forge`.
+Use this when an outside process or team owns review and merge. The loop dispatches and opens the MR, then **waits** — it never reviews or merges itself. The contract:
+
+- **Request changes:** your process submits a GitHub *Request changes* review, or applies the **`changes-requested`** label on GitLab. The loop reads *all* feedback (review summaries, inline threads, comments — via `forge pr-feedback`), heals on the branch, pushes, and clears the signal so you re-review the new commits. Capped at `maxHeal`, then parked `needs-human`.
+- **Approve:** the loop waits; **your process merges**. On merge, the loop dispatches the next issue automatically.
+- **Plain comments are not a trigger** — you must emit the changes-requested signal. Closing an MR without merging parks its issue (no re-dispatch).
+
+## GitLab — verify these before trusting it (⚠️ untested)
+
+The GitLab backend in `bin/forge` is written from docs and **not validated against a real instance**. On yours, confirm:
+
+- `glab issue list -F json` / `glab mr list -F json` field names (`iid`, `source_branch`, `labels`, `state`, approval fields);
+- `pr-list`'s review-state derivation matches your approval setup (the `approved` / `approvals_left` fields);
+- the **`changes-requested` label round-trip** for external mode (apply → loop detects `CHANGES_REQUESTED` → heal → `pr-clear-changes` removes it);
+- `pr-feedback` note/thread JSON shape (`glab mr note list -F json`) so heal sees the real feedback;
+- `pr-changes-count` (heal cap) — on GitLab it counts marker comments; confirm it increments as you expect.
+
+All of these are marked `# VERIFY` in `bin/forge`.
 
 ## The honest leaks (don't expect to automate these away)
 

@@ -88,11 +88,32 @@ skills/agent-ready-issue/     the issue-authoring skill (templated)
 playbook.md                   the manual setup (identities, protection, the preflight spike)
 ```
 
-## Status & honest caveats
+## Validation status — read before relying on this
 
-- **GitHub path is validated.** The **GitLab path is best-effort** — the `glab` JSON shapes, the "request changes" emulation (GitLab has no native equivalent; we use a `changes-requested` label + marker comment), and the approval-rule setup need validation on your instance. Verify-points are marked in `bin/forge`.
-- **Preflight is irreducibly per-repo.** Getting `preflight` to run green inside the sandbox is a per-repo spike (see `playbook.md`).
-- **Tests that need real services** (Postgres, etc.) make the sandbox much harder — you'll need docker-in-docker or service containers in the Dockerfile.
-- **The usage-limit detection regexes** in `loop.ts` are best-effort; tune them the first time a real limit fires.
+This is a v0.1. Be precise about what has actually been exercised:
+
+- **✅ Validated** — run end-to-end and observed working.
+- **🧪 Built** — code-complete, type-checked / syntax-checked, but **not yet run end-to-end**.
+- **⚠️ Best-effort** — **GitLab**: written from docs, **not tested against a real instance**; marked `# VERIFY` in `bin/forge`.
+
+| Component | GitHub | GitLab |
+|---|---|---|
+| `bootstrap.sh` (curl-pipe install + package.json merge) | ✅ | ✅ (platform-agnostic) |
+| `afk:init` (stack detect, Dockerfile/preflight/skill render) | ✅ | 🧪 (glab install path unverified) |
+| `forge` read verbs (issue/pr list, view, diff) | ✅ | ⚠️ |
+| `forge` write verbs (create, approve, merge, label, comment) | 🧪 (map to verbs proven in the source project) | ⚠️ |
+| **Internal** review mode (loop reviews + merges) | ✅ (implement → PR → independent review → merge) | ⚠️ |
+| **External** review mode (request-changes → heal, aggregated feedback, wait-for-external-merge) | 🧪 | ⚠️ |
+| Heal step / `maxHeal` escalation | 🧪 | ⚠️ |
+| e2e sentinel | 🧪 (needs `playwright install` + a validation run) | 🧪 |
+| Usage-limit guard | 🧪 — **detection regexes are guesses; tune on the first real limit** | 🧪 |
+
+> The single-issue happy path (implement → PR → independent review → merge) and the GitHub `forge` reads were validated in the project this was extracted from. **External mode and the entire GitLab backend have not been run end-to-end** — treat standing them up as a debugging session, not a clean install. `playbook.md` lists the GitLab verify-points.
+
+### Caveats that aren't about validation (they're inherent)
+
+- **Preflight is irreducibly per-repo.** Getting `preflight` green inside the sandbox is a per-repo spike (see `playbook.md`).
+- **Tests that need real services** (Postgres, etc.) make the sandbox much harder — docker-in-docker or service containers in the Dockerfile.
+- **Corporate policy** may forbid bot-merges to protected branches, gate token creation behind SSO, or restrict AI tooling — check before relying on this at work.
 
 Built on [Sandcastle](https://github.com/mattpocock/sandcastle) by Matt Pocock.
