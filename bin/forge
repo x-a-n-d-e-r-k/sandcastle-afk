@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# forge — a thin, forge-agnostic adapter over `gh` (GitHub) and `glab` (GitLab).
+#
+# The orchestrator (loop.ts etc.) AND the agent prompts call `forge <verb>`,
+# never `gh`/`glab` directly. Swap platforms by setting FORGE_PLATFORM.
+# Identity is whatever token is in the environment when forge is called
+# (e.g. `GH_TOKEN="$REVIEW_TOKEN" forge pr-approve 5` posts as the reviewer).
+#
+#   FORGE_PLATFORM = github | gitlab   (required)
+#
+# Normalized review state (pr-list / pr-review-state): APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED
+#
+# Requires: jq, and gh (github) or glab (gitlab).
+set -euo pipefail
+
+PLATFORM="${FORGE_PLATFORM:-github}"
+verb="${1:-}"; shift || true
+
+die() { echo "forge: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+need jq
+
+case "$PLATFORM" in
+  github) need gh ;;
+  gitlab) need glab ;;
+  *) die "unknown FORGE_PLATFORM '$PLATFORM' (expected github|gitlab)" ;;
+esac
+
+# ---- arg helpers -----------------------------------------------------------
+# Collect repeated --label values and pass-through of common flags.
+labels=(); title=""; body=""; body_file=""; base=""; comment=""; state="open"
+add_labels=(); rm_labels=(); new_title=""; POS=(); SQUASH=0; DELBR=0; REVIEWER=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label) labels+=("$2"); shift 2 ;;
+    --add-label) add_labels+=("$2"); shift 2 ;;
+    --remove-label) rm_labels+=("$2"); shift 2 ;;
+    --title) title="$2"; shift 2 ;;
+    --new-title) new_title="$2"; shift 2 ;;
+    --body) body="$2"; shift 2 ;;
+    --body-file) body_file="$2"; shift 2 ;;
+    --base) base="$2"; shift 2 ;;
+    --comment) comment="$2"; shift 2 ;;
+    --state) state="$2"; shift 2 ;;
+    --squash) SQUASH=1; shift ;;
+    --delete-branch) DELBR=1; shift ;;
+    --as-reviewer) REVIEWER=1; shift ;;
+    *) POS+=("$1"); shift ;;
+  esac
+done
+
+# --as-reviewer: run this call under the reviewer identity (FORGE_REVIEW_TOKEN),
+# so an approval is not attributed to the PR/MR author.
+if [[ "${REVIEWER:-0}" == 1 ]]; then
+  : "${FORGE_REVIEW_TOKEN:?--as-reviewer requires FORGE_REVIEW_TOKEN in the environment}"
+  if [[ "$PLATFORM" == github ]]; then export GH_TOKEN="$FORGE_REVIEW_TOKEN"
+  else export GITLAB_TOKEN="$FORGE_REVIEW_TOKEN"; export GLAB_TOKEN="$FORGE_REVIEW_TOKEN"; fi
+fi
+NUM="${POS[0]:-}"
+CHANGES_LABEL="changes-requested"   # GitLab convention for "request changes"
+
+# Build per-platform label flags
+gh_label_flags() { local f=(); for l in "$@"; do f+=(--label "$l"); done; printf '%s\n' "${f[@]}"; }
+csv() { local IFS=,; echo "$*"; }
+
+case "$verb" in
+  # ---------- issues ----------
+  issue-list)
+    if [[ "$PLATFORM" == github ]]; then
+      args=(issue list --state "$state" --json number,title,labels --limit 200)
+      [[ ${#labels[@]} -gt 0 ]] && while read -r f; do args+=("$f"); done < <(gh_label_flags "${labels[@]}")
+      gh "${args[@]}" | jq '[.[] | {number, title, labels: [.labels[].name]}]'
+    else
+      # VERIFY: glab list JSON shape on your version
+      glab issue list --state "$state" $( [[ ${#labels[@]} -gt 0 ]] && echo --label "$(csv "${labels[@]}")" ) -F json \
+        | jq '[.[] | {number: .iid, title, labels: (.labels // [])}]'
+    fi ;;
+
+  issue-view)
+    [[ -n "$NUM" ]] || die "issue-view needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh issue view "$NUM" --json number,title,body,labels | jq '{number, title, body, labels: [.labels[].name]}'
+    else
+      glab issue view "$NUM" -F json | jq '{number: .iid, title, body: (.description // ""), labels: (.labels // [])}'
+    fi ;;
+
+  issue-create)
+    [[ -n "$title" && -n "$body_file" ]] || die "issue-create needs --title and --body-file"
+    if [[ "$PLATFORM" == github ]]; then
+      args=(issue create --title "$title" --body-file "$body_file")
+      while read -r f; do args+=("$f"); done < <(gh_label_flags "${labels[@]}")
+      gh "${args[@]}"
+    else
+      glab issue create --title "$title" --description "$(cat "$body_file")" \
+        $( [[ ${#labels[@]} -gt 0 ]] && echo --label "$(csv "${labels[@]}")" ) --yes
+    fi ;;
+
+  issue-edit)
+    [[ -n "$NUM" ]] || die "issue-edit needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      args=(issue edit "$NUM"); [[ -n "$body_file" ]] && args+=(--body-file "$body_file")
+      [[ -n "$new_title" ]] && args+=(--title "$new_title")
+      for l in "${add_labels[@]:-}"; do [[ -n "$l" ]] && args+=(--add-label "$l"); done
+      for l in "${rm_labels[@]:-}"; do [[ -n "$l" ]] && args+=(--remove-label "$l"); done
+      gh "${args[@]}"
+    else
+      args=(issue update "$NUM"); [[ -n "$body_file" ]] && args+=(--description "$(cat "$body_file")")
+      [[ -n "$new_title" ]] && args+=(--title "$new_title")
+      [[ ${#add_labels[@]:-0} -gt 0 ]] && args+=(--label "$(csv "${add_labels[@]}")")
+      [[ ${#rm_labels[@]:-0} -gt 0 ]] && args+=(--unlabel "$(csv "${rm_labels[@]}")")
+      glab "${args[@]}"
+    fi ;;
+
+  issue-close)
+    [[ -n "$NUM" ]] || die "issue-close needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh issue close "$NUM" $( [[ -n "$comment" ]] && echo --comment "$comment" )
+    else
+      [[ -n "$comment" ]] && glab issue note "$NUM" -m "$comment" || true
+      glab issue close "$NUM"
+    fi ;;
+
+  # ---------- pull / merge requests ----------
+  pr-create)
+    [[ -n "$base" && -n "$title" ]] || die "pr-create needs --base and --title"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr create --base "$base" --title "$title" --body "$body"
+    else
+      glab mr create --source-branch "$(git branch --show-current)" --target-branch "$base" \
+        --title "$title" --description "$body" --yes --remove-source-branch
+    fi ;;
+
+  pr-list)
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr list --state "$state" --json number,headRefName,reviewDecision,labels --limit 100 \
+        | jq '[.[] | {number, headRef: .headRefName,
+              reviewState: (.reviewDecision | if . == "" or . == null then "REVIEW_REQUIRED" else . end),
+              labels: [.labels[].name]}]'
+    else
+      # VERIFY: derive review state from approvals + the changes-requested label
+      glab mr list --state "$state" -F json | jq --arg cr "$CHANGES_LABEL" '
+        [.[] | {number: .iid, headRef: .source_branch, labels: (.labels // []),
+          reviewState: (
+            if ((.labels // []) | index($cr)) then "CHANGES_REQUESTED"
+            elif (.approved == true or (.approvals_left // 1) == 0) then "APPROVED"
+            else "REVIEW_REQUIRED" end)}]'
+    fi ;;
+
+  pr-view)
+    [[ -n "$NUM" ]] || die "pr-view needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json number,title,body,headRefName,baseRefName \
+        | jq '{number, title, body, headRef: .headRefName, baseRef: .baseRefName}'
+    else
+      glab mr view "$NUM" -F json \
+        | jq '{number: .iid, title, body: (.description // ""), headRef: .source_branch, baseRef: .target_branch}'
+    fi ;;
+
+  pr-diff)
+    [[ -n "$NUM" ]] || die "pr-diff needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr diff "$NUM"; else glab mr diff "$NUM"; fi ;;
+
+  pr-approve)
+    [[ -n "$NUM" ]] || die "pr-approve needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr review "$NUM" --approve $( [[ -n "$body" ]] && echo --body "$body" )
+    else
+      glab mr approve "$NUM"
+      [[ -n "$body" ]] && glab mr note "$NUM" -m "$body" || true
+    fi ;;
+
+  pr-request-changes)
+    [[ -n "$NUM" ]] || die "pr-request-changes needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr review "$NUM" --request-changes --body "${body:-Changes requested.}"
+    else
+      # GitLab has no native "request changes": mark with a label + a marked comment.
+      glab label create "$CHANGES_LABEL" --color "#D93F0B" 2>/dev/null || true
+      glab mr update "$NUM" --label "$CHANGES_LABEL"
+      glab mr note "$NUM" -m "[forge:changes-requested] ${body:-Changes requested.}"
+    fi ;;
+
+  pr-changes-count)
+    [[ -n "$NUM" ]] || die "pr-changes-count needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json reviews | jq '[.reviews[] | select(.state=="CHANGES_REQUESTED")] | length'
+    else
+      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[] | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
+    fi ;;
+
+  pr-clear-changes)  # called after a heal push, to reset the gitlab label
+    [[ -n "$NUM" ]] || die "pr-clear-changes needs <number>"
+    if [[ "$PLATFORM" == gitlab ]]; then glab mr update "$NUM" --unlabel "$CHANGES_LABEL" 2>/dev/null || true; fi ;;
+
+  pr-merge)
+    [[ -n "$NUM" ]] || die "pr-merge needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --delete-branch )
+    else
+      glab mr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --remove-source-branch ) --yes
+    fi ;;
+
+  pr-label)
+    [[ -n "$NUM" ]] || die "pr-label needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      args=(pr edit "$NUM")
+      for l in "${add_labels[@]:-}"; do [[ -n "$l" ]] && args+=(--add-label "$l"); done
+      for l in "${rm_labels[@]:-}"; do [[ -n "$l" ]] && args+=(--remove-label "$l"); done
+      gh "${args[@]}"
+    else
+      args=(mr update "$NUM")
+      [[ ${#add_labels[@]:-0} -gt 0 ]] && args+=(--label "$(csv "${add_labels[@]}")")
+      [[ ${#rm_labels[@]:-0} -gt 0 ]] && args+=(--unlabel "$(csv "${rm_labels[@]}")")
+      glab "${args[@]}"
+    fi ;;
+
+  pr-comment)
+    [[ -n "$NUM" ]] || die "pr-comment needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "$body"; else glab mr note "$NUM" -m "$body"; fi ;;
+
+  git-setup)  # configure git push credentials for the current platform's token
+    if [[ "$PLATFORM" == github ]]; then
+      git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
+    else
+      git config --global credential.helper '!f() { echo username=oauth2; echo "password=${GITLAB_TOKEN:-$GLAB_TOKEN}"; }; f'
+    fi ;;
+
+  pr-feedback)  # latest "changes requested" feedback text, for the heal step
+    [[ -n "$NUM" ]] || die "pr-feedback needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json reviews | jq -r '[.reviews[] | select(.state=="CHANGES_REQUESTED")] | last | .body // "(no feedback body)"'
+    else
+      glab mr note list "$NUM" -F json 2>/dev/null \
+        | jq -r '[.[] | select(.body | startswith("[forge:changes-requested]"))] | last | .body // "(no feedback)"'
+    fi ;;
+
+  *) die "unknown verb '$verb'. See bin/forge for the verb list." ;;
+esac

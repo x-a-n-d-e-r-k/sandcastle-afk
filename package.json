@@ -1,0 +1,23 @@
+{
+  "name": "sandcastle-afk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An opinionated, forge-agnostic AFK-developer loop on top of @ai-hero/sandcastle: file an agent-ready issue, an agent implements it with TDD, opens a PR/MR, an independent reviewer approves, it merges. GitHub and GitLab.",
+  "scripts": {
+    "afk:init": "tsx scripts/init.ts",
+    "afk": "tsx .sandcastle/main.ts",
+    "afk:review": "tsx .sandcastle/review.ts",
+    "afk:loop": "tsx .sandcastle/loop.ts",
+    "afk:sentinel": "tsx .sandcastle/sentinel.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-hero/sandcastle": "^0.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,41 @@
+## Summary
+
+<what and why, 1–3 sentences>
+
+## Specification
+
+<exact contract: signature/types, inputs, outputs, error behavior>
+
+## Examples
+
+- `<input>` → `<expected output>`
+- `<input>` → `<expected output>`  (boundary)
+
+## Acceptance criteria
+
+- [ ] <discrete, testable statement>
+- [ ] <edge-case behavior>
+
+## Required tests
+
+The implementation MUST include tests covering:
+- <case — behavior>
+- <boundary>
+- <edge case — chosen so it FAILS under a plausible wrong implementation (non-vacuous)>
+
+## Placement
+
+- Implement in `<path>`; export/wire from `<entrypoint>`.
+- Add tests under `<test path>` following existing conventions.
+
+## Out of scope
+
+- <do NOT do X>
+
+## Open questions
+
+- <none — or list them; if any remain, label needs-feedback instead of agent-ready>
+
+## Gates (for the implementing agent)
+
+Before opening the request, all must be green from the repo root: {{GATES}}. The request body must contain `Closes #<this issue>`.

@@ -1,0 +1,73 @@
+---
+name: agent-ready-issue
+description: Make a forge issue fully specified for an autonomous coding agent to implement end-to-end and pass the gates — by authoring a new issue or retrofitting an existing one in place. Use when the user wants to file an "{{READY_LABEL}}" issue, make an existing issue agent-ready, queue work for the AFK loop, triage a backlog, or turn a rough idea or bug into a precise, testable, single-iteration task. Creates or edits issues via the repo's `forge` adapter (GitHub or GitLab).
+---
+
+# Agent-Ready Issue
+
+An **agent-ready issue** is one an autonomous coding agent can pick up with zero extra context and carry all the way to a merged PR/MR: it implements with TDD, runs preflight, pushes, opens a request, and an independent reviewer re-runs everything and approves. If the issue is vague the agent guesses; if it is an epic, no single run can close it. This skill turns a request into a precise, testable, single-iteration issue.
+
+> Run the helper scripts from the **target repo root** (they read `afk.config.json` and use `./bin/forge`).
+
+## Golden rule
+
+Write the issue so **success is mechanically checkable**. Every acceptance criterion must map to a test the agent can write and run. If you cannot state how you would verify it, it is not ready.
+
+## Step 1 — Scope check (first)
+
+- **One iteration?** Completable in a single focused run (~one PR, a handful of files). If it is a multi-part epic or tracking bucket, do NOT make it agent-ready: label it `{{EPIC_LABEL}}` and split it into discrete agent-ready children.
+- **Self-contained?** All context lives in the repo or the issue. No "ask so-and-so".
+- **Decided?** Real open questions make the agent guess wrong. Put them under "Open questions" and label `{{NEEDS_FEEDBACK_LABEL}}` instead of `{{READY_LABEL}}` until answered.
+
+## Step 2 — Interview (ask only what is missing)
+
+Ask the user one tight batch of questions for anything unspecified: **outcome** (what/why), **exact behavior** (the precise contract — signature/types, endpoint shape, or UI behavior), **examples** (2–3 concrete input→output incl. a boundary), **edge cases** (empty/zero, max, invalid, asymmetric branches — these become required tests), **placement** (which file/area, where exported), **out of scope**.
+
+## Step 3 — Write the issue (required sections)
+
+Use `template.md`:
+
+- **Title** — conventional + scoped (`feat: …` / `fix: …`).
+- **Summary** — 1–3 sentences: what and why.
+- **Specification** — the exact contract. Unambiguous.
+- **Examples** — concrete input → output, including a boundary.
+- **Acceptance criteria** — a checklist of discrete, individually verifiable statements.
+- **Required tests** — enumerate the specific cases the agent MUST write, including edge cases. Demand **non-vacuous** tests: a criterion like "splits asymmetrically" must be tested with an input that would FAIL if the logic were swapped, not one that passes either way. (Reviewers reject vacuous tests.)
+- **Placement** — where the code and tests go.
+- **Out of scope / constraints** — explicit don'ts.
+- **Open questions** — if non-empty → `{{NEEDS_FEEDBACK_LABEL}}`, not `{{READY_LABEL}}`.
+
+## Step 4 — Gates (state them in the issue footer)
+
+Before opening the request, all of these must be green from the repo root: {{GATES}}. The request body must contain a closing keyword (`Closes #<this issue>`). An independent reviewer re-runs all of the above, so the Required tests must genuinely exercise the behavior.
+
+## Step 5 — Label and create
+
+- Fully specified → `{{READY_LABEL}}`.
+- Open questions → `{{NEEDS_FEEDBACK_LABEL}}` (loop skips it until you answer and remove the label).
+- Epic / idea / tracking → `{{EPIC_LABEL}}` / `{{IDEA_LABEL}}` (excluded from the loop).
+
+Create as the **human** (not a bot token):
+`bash .claude/skills/agent-ready-issue/create-issue.sh "<title>" <body-file>`
+
+## Retrofitting an existing issue
+
+Make an existing issue agent-ready without recreating it — keep its number, history, links.
+
+1. **Read it fully, incl. comments** — `forge issue-view <N>` and the discussion often hold the real spec.
+2. **Assess** against the Quality bar; identify the gaps.
+3. **Interview only for the gaps** — don't re-ask what's already answered.
+4. **Rewrite** into the required structure, preserving substantive intent.
+5. **Update in place + label:** `bash .claude/skills/agent-ready-issue/retrofit-issue.sh <N> <body-file>`.
+6. If real open questions remain, use `{{NEEDS_FEEDBACK_LABEL}}`.
+
+**Backlog:** triage first — `bash .claude/skills/agent-ready-issue/list-candidates.sh` lists untriaged open issues. Classify each (ready / needs-feedback / epic), then retrofit **one at a time**. Quality per issue beats volume.
+
+## Quality bar (self-check before creating)
+
+- [ ] Completable in one iteration.
+- [ ] Every acceptance criterion maps to a concrete test.
+- [ ] Edge cases enumerated and required as tests.
+- [ ] Tests specified to be non-vacuous (would fail under a plausible wrong implementation).
+- [ ] Placement specified.
+- [ ] No unresolved questions (else `{{NEEDS_FEEDBACK_LABEL}}`).
