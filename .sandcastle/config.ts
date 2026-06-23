@@ -32,6 +32,8 @@ export type Cfg = {
     e2eRegression: string;
   };
   maxHeal: number;
+  maxPipelineRetry: number;
+  flakyJobs: string[];
   pollMinutes: number;
   idleTimeoutSeconds: number;
 };

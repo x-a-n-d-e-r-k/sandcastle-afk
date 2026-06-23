@@ -40,7 +40,7 @@ const cfg = {
   install, preflight: preflight.length ? preflight : [run("test")], e2e, imageName: "sandcastle-afk",
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
-  maxHeal: 3, pollMinutes: 5, idleTimeoutSeconds: 900,
+  maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[], pollMinutes: 5, idleTimeoutSeconds: 900,
 };
 
 if (!has("afk.config.json")) {

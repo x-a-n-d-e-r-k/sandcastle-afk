@@ -27,6 +27,8 @@
     "e2eRegression": "e2e-regression"
   },
   "maxHeal": 3,
+  "maxPipelineRetry": 2,
+  "flakyJobs": [],
   "pollMinutes": 5,
   "idleTimeoutSeconds": 900
 }

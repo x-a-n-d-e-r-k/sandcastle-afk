@@ -19,7 +19,7 @@ agent-ready issue ──▶ implement (TDD + preflight) ──▶ PR/MR (Closes 
                          merge ◀── (branch protection)   heal ──▶ re-review
 ```
 
-There is **no CI gate** by default — the reviewer's independent preflight re-run *is* the gate. (On GitLab you can swap in the pipeline; see `playbook.md`.)
+The reviewer's independent preflight is a fast pre-merge check. **On a forge with CI, the loop also gates the merge on the pipeline** — it waits for a running pipeline, retries flaky failures (`maxPipelineRetry`), and routes real failures (with the failed-job logs) to the heal agent before merging. If there's no pipeline, the reviewer's preflight is the gate.
 
 ## Quickstart
 
@@ -57,7 +57,7 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 ## Configuration (`afk.config.json`)
 
-`platform`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+`platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
 
 ## Review modes
 
@@ -105,10 +105,13 @@ This is a v0.1. Be precise about what has actually been exercised:
 | **Internal** review mode (loop reviews + merges) | ✅ (implement → PR → independent review → merge) | ✅¹ (self-hosted) |
 | **External** review mode (request-changes → heal, aggregated feedback, wait-for-external-merge) | 🧪 | ⚠️ |
 | Heal step / `maxHeal` escalation | 🧪 | ⚠️ |
+| Pipeline-aware merge gate (wait / flake-retry / heal real CI failures) | 🧪 | 🧪² |
 | e2e sentinel | 🧪 (needs `playwright install` + a validation run) | 🧪 |
 | Usage-limit guard | 🧪 — **detection regexes are guesses; tune on the first real limit** | 🧪 |
 
 > ¹ Validated end-to-end against a **live self-hosted GitLab** instance, internal mode, in [issue #1](https://github.com/x-a-n-d-e-r-k/sandcastle-afk/issues/1) — which surfaced the `forge`/`init` fixes now applied. The GitHub single-issue happy path was validated in the project this was extracted from. **Still untested: GitLab *external* mode and the heal/changes-requested path** — treat those as a debugging session, not a clean install. `playbook.md` lists the remaining verify-points.
+>
+> ² The merge-stall this fixes (glab arming merge-when-pipeline-succeeds, then a flaky job canceling it) was observed live on self-hosted GitLab in [issue #2](https://github.com/x-a-n-d-e-r-k/sandcastle-afk/issues/2). The wait/retry/heal **fix** and the new pipeline `forge` verbs are built and type-checked but **not yet validated end-to-end**.
 
 ### Caveats that aren't about validation (they're inherent)
 

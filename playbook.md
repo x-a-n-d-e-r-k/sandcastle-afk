@@ -89,6 +89,7 @@ The GitLab backend in `bin/forge` is written from docs and **not validated again
 - the **`changes-requested` label round-trip** for external mode (apply → loop detects `CHANGES_REQUESTED` → heal → `pr-clear-changes` removes it);
 - `pr-feedback` note/thread JSON shape (`glab mr note list -F json`) so heal sees the real feedback;
 - `pr-changes-count` (heal cap) — on GitLab it counts marker comments; confirm it increments as you expect.
+- **pipeline verbs** (`pr-pipeline`, `-retry`, `-failed-jobs`, `-failures`): confirm `.head_pipeline` is present on `projects/:id/merge_requests/:iid`, the `pipelines/:id/retry` POST works, and `jobs?scope=failed` + `jobs/:id/trace` return what you expect. `pr-merge` now passes `--auto-merge=false` so the loop owns the pipeline gate (no implicit merge-when-pipeline-succeeds).
 
 All of these are marked `# VERIFY` in `bin/forge`.
 

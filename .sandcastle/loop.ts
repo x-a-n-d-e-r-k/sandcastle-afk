@@ -134,7 +134,42 @@ while (true) {
 
       if (pr.reviewState === "APPROVED") {
         if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleep(POLL_MS); }
-        else { log(`PR #${pr.number} APPROVED -> merging`); forge(`pr-merge ${pr.number} --squash --delete-branch`); log(`merged #${pr.number}`); }
+        else {
+          const pl = forgeJSON<{ status: string }>(`pr-pipeline ${pr.number}`);
+          if (["success", "skipped", "none"].includes(pl.status)) {
+            log(`PR #${pr.number} APPROVED, pipeline ${pl.status} -> merging`);
+            forge(`pr-merge ${pr.number} --squash --delete-branch --no-auto-merge`);
+            log(`merged #${pr.number}`);
+          } else if (["running", "pending"].includes(pl.status)) {
+            log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
+            await sleep(POLL_MS);
+          } else {
+            // failed | canceled — retry flakes, else heal against the pipeline logs
+            const tries = Number(forge(`pr-pipeline-retry-count ${pr.number}`)) || 0;
+            const failedJobs = forge(`pr-pipeline-failed-jobs ${pr.number}`).split("\n").map((s) => s.trim()).filter(Boolean);
+            const onlyFlaky = cfg.flakyJobs.length ? failedJobs.every((j) => cfg.flakyJobs.includes(j)) : true;
+            if (onlyFlaky && tries < cfg.maxPipelineRetry) {
+              log(`PR #${pr.number} pipeline ${pl.status} — flake retry ${tries + 1}/${cfg.maxPipelineRetry} [${failedJobs.join(", ") || "?"}]`);
+              forge(`pr-pipeline-retry-mark ${pr.number}`);
+              forge(`pr-pipeline-retry ${pr.number}`);
+              await sleep(POLL_MS);
+            } else {
+              const heals = Number(forge(`pr-changes-count ${pr.number}`)) || 0;
+              if (heals >= MAX_HEAL) {
+                log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating`);
+                escalate(pr.number);
+              } else {
+                log(`PR #${pr.number} pipeline failing after retries -> heal ${heals + 1}/${MAX_HEAL}`);
+                syncBranch(branch);
+                await runGuarded(healOpts(pr.number, branch, issue));
+                forge(`pr-clear-changes ${pr.number}`);
+                syncBranch(branch);
+                log(`re-reviewing #${pr.number}`);
+                await runGuarded(reviewOpts(pr.number, branch, issue));
+              }
+            }
+          }
+        }
       } else if (pr.reviewState === "CHANGES_REQUESTED") {
         const heals = Number(forge(`pr-changes-count ${pr.number}`)) || 0;
         if (heals >= MAX_HEAL) {

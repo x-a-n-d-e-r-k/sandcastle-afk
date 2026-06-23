@@ -29,7 +29,7 @@ esac
 # ---- arg helpers -----------------------------------------------------------
 # Collect repeated --label values and pass-through of common flags.
 labels=(); title=""; body=""; body_file=""; base=""; comment=""; state="open"
-add_labels=(); rm_labels=(); new_title=""; POS=(); SQUASH=0; DELBR=0; REVIEWER=0
+add_labels=(); rm_labels=(); new_title=""; POS=(); SQUASH=0; DELBR=0; REVIEWER=0; NOAUTO=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --label) labels+=("$2"); shift 2 ;;
@@ -45,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --squash) SQUASH=1; shift ;;
     --delete-branch) DELBR=1; shift ;;
     --as-reviewer) REVIEWER=1; shift ;;
+    --no-auto-merge) NOAUTO=1; shift ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -62,6 +63,15 @@ CHANGES_LABEL="changes-requested"   # GitLab convention for "request changes"
 # Build per-platform label flags
 gh_label_flags() { local f=(); for l in "$@"; do f+=(--label "$l"); done; printf '%s\n' "${f[@]}"; }
 csv() { local IFS=,; echo "$*"; }
+
+# gitlab: echo "<project_id> <iid> <head_pipeline_id>" for MR number $1 (pipeline id may be empty)
+gl_ctx() {
+  local mr pid iid pip
+  mr="$(glab mr view "$1" -F json)"
+  pid="$(jq -r '.project_id' <<<"$mr")"; iid="$(jq -r '.iid' <<<"$mr")"
+  pip="$(glab api "projects/$pid/merge_requests/$iid" 2>/dev/null | jq -r '.head_pipeline.id // empty')"
+  echo "$pid $iid $pip"
+}
 
 case "$verb" in
   # ---------- issues ----------
@@ -208,7 +218,7 @@ case "$verb" in
     if [[ "$PLATFORM" == github ]]; then
       gh pr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --delete-branch )
     else
-      glab mr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --remove-source-branch ) --yes
+      glab mr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --remove-source-branch ) $( [[ "${NOAUTO}" == 1 ]] && echo --auto-merge=false ) --yes
     fi ;;
 
   pr-label)
@@ -228,6 +238,74 @@ case "$verb" in
   pr-comment)
     [[ -n "$NUM" ]] || die "pr-comment needs <number>"
     if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "$body"; else glab mr note "$NUM" -m "$body"; fi ;;
+
+  pr-pipeline)  # -> {status, id}; status in success|running|pending|failed|canceled|skipped|none
+    [[ -n "$NUM" ]] || die "pr-pipeline needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      # VERIFY (gh): roll up the status-check rollup
+      gh pr view "$NUM" --json statusCheckRollup,headRefOid | jq '
+        (.statusCheckRollup // []) as $c | { id: .headRefOid, status: (
+          if ($c|length)==0 then "none"
+          elif ($c|any(((.conclusion // "")) as $x | ($x=="FAILURE" or $x=="TIMED_OUT" or $x=="CANCELLED" or $x=="STARTUP_FAILURE"))) then "failed"
+          elif ($c|any(((.status // "")) as $x | ($x=="IN_PROGRESS" or $x=="QUEUED" or $x=="PENDING" or $x=="WAITING"))) then "running"
+          else "success" end) }'
+    else
+      read -r pid iid _ < <(gl_ctx "$NUM")
+      glab api "projects/$pid/merge_requests/$iid" | jq '
+        (.head_pipeline) as $p | { id: ($p.id // null), status: (
+          if $p == null then "none"
+          else ($p.status) as $s |
+            if $s=="success" then "success" elif $s=="failed" then "failed"
+            elif $s=="canceled" then "canceled" elif $s=="skipped" then "skipped"
+            else "running" end end) }'
+    fi ;;
+
+  pr-pipeline-retry)  # retry failed/canceled jobs in the head pipeline
+    [[ -n "$NUM" ]] || die "pr-pipeline-retry needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
+      [[ -n "$rid" ]] && gh run rerun "$rid" --failed && echo "rerun $rid" || echo "(no run to retry)"
+    else
+      read -r pid iid pip < <(gl_ctx "$NUM")
+      [[ -n "$pip" ]] && glab api --method POST "projects/$pid/pipelines/$pip/retry" >/dev/null && echo "retried pipeline $pip" || echo "(no pipeline to retry)"
+    fi ;;
+
+  pr-pipeline-failed-jobs)  # newline-separated failed job names (for the flaky-job check)
+    [[ -n "$NUM" ]] || die "pr-pipeline-failed-jobs needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
+      [[ -n "$rid" ]] && gh run view "$rid" --json jobs | jq -r '.jobs[] | select(.conclusion=="failure") | .name' || true
+    else
+      read -r pid iid pip < <(gl_ctx "$NUM")
+      [[ -n "$pip" ]] && glab api "projects/$pid/pipelines/$pip/jobs?scope=failed" | jq -r '.[].name' || true
+    fi ;;
+
+  pr-pipeline-failures)  # failed job names + trace tails, for the heal prompt
+    [[ -n "$NUM" ]] || die "pr-pipeline-failures needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
+      [[ -n "$rid" ]] && gh run view "$rid" --log-failed 2>/dev/null | tail -200 || echo "(no failed logs)"
+    else
+      read -r pid iid pip < <(gl_ctx "$NUM")
+      if [[ -z "$pip" ]]; then echo "(no pipeline)"; else
+        glab api "projects/$pid/pipelines/$pip/jobs?scope=failed" | jq -r '.[].id' | while read -r jid; do
+          echo "### FAILED JOB: $(glab api "projects/$pid/jobs/$jid" | jq -r '.name')"
+          glab api "projects/$pid/jobs/$jid/trace" 2>/dev/null | tail -60; echo
+        done
+      fi
+    fi ;;
+
+  pr-pipeline-retry-count)  # count of [forge:pipeline-retry] markers (stateless retry budget)
+    [[ -n "$NUM" ]] || die "pr-pipeline-retry-count needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json comments | jq '[.comments[] | select(.body | startswith("[forge:pipeline-retry]"))] | length'
+    else
+      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:pipeline-retry]"))] | length' 2>/dev/null || echo 0
+    fi ;;
+
+  pr-pipeline-retry-mark)  # record one retry attempt
+    [[ -n "$NUM" ]] || die "pr-pipeline-retry-mark needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:pipeline-retry]"; else glab mr note "$NUM" -m "[forge:pipeline-retry]"; fi ;;
 
   git-setup)  # configure git push credentials for the current platform's token
     if [[ "$PLATFORM" == github ]]; then
