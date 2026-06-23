@@ -46,6 +46,7 @@ Before opening the request, all of these must be green from the repo root: {{GAT
 - Fully specified → `{{READY_LABEL}}`.
 - Open questions → `{{NEEDS_FEEDBACK_LABEL}}` (loop skips it until you answer and remove the label).
 - Epic / idea / tracking → `{{EPIC_LABEL}}` / `{{IDEA_LABEL}}` (excluded from the loop).
+- Optional priority: add a priority label (e.g. `highest`/`high`/`low`/`lowest`) to control dispatch order. No priority label = middle.
 
 Create as the **human** (not a bot token):
 `bash .claude/skills/agent-ready-issue/create-issue.sh "<title>" <body-file>`

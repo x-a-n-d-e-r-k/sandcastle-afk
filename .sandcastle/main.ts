@@ -1,6 +1,6 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forgeJSON, sh, log, isExcluded } from "./config.js";
+import { cfg, forgeJSON, sh, log, isExcluded, priorityRank } from "./config.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
 //   pnpm afk        (loops? no — use `pnpm afk:loop` for continuous)
@@ -16,7 +16,7 @@ const next = issues
   .filter((i) => !openHeads.has(`agent/issue-${i.number}`))
   .sort((a, b) => {
     const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
-    return s(a.title) - s(b.title) || a.number - b.number;
+    return priorityRank(a.labels) - priorityRank(b.labels) || s(a.title) - s(b.title) || a.number - b.number;
   })[0];
 
 if (!next) {

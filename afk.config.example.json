@@ -29,6 +29,7 @@
   "maxHeal": 3,
   "maxPipelineRetry": 2,
   "flakyJobs": [],
+  "priorityLabels": ["highest", "high", "low", "lowest"],
   "pollMinutes": 5,
   "idleTimeoutSeconds": 900
 }

@@ -57,7 +57,9 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 ## Configuration (`afk.config.json`)
 
-`platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+`platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), **`priorityLabels`** (ordered most-urgent-first, default `["highest","high","low","lowest"]`), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+
+**Prioritizing issues:** the loop dispatches by **priority label first**, then `fix:`-titled before others, then oldest issue number. Add a `priorityLabels` label (e.g. `highest`/`high`/`low`/`lowest`) to bump or sink an issue; an `agent-ready` issue with **no** priority label sits in the middle (between `high` and `low`). `pnpm afk:init --labels` creates the priority labels. (Since the loop only pulls `agent-ready` and works one at a time, applying/withholding `agent-ready` is itself a coarse queue control.)
 
 ## Review modes
 

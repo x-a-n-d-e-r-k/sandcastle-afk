@@ -34,6 +34,7 @@ export type Cfg = {
   maxHeal: number;
   maxPipelineRetry: number;
   flakyJobs: string[];
+  priorityLabels: string[];
   pollMinutes: number;
   idleTimeoutSeconds: number;
 };
@@ -61,6 +62,15 @@ export const forgeJSON = <T = any>(args: string, tokenEnv: Record<string, string
   JSON.parse(forge(args, tokenEnv) || "null");
 
 // The exclusion set for issue dispatch (supports "epic:foo" sub-labels too).
+// Priority: an ordered list, most-urgent first (e.g. highest, high, low, lowest).
+// An issue with none of these labels ranks at the MIDPOINT (between the upper and lower halves).
+const PRI = cfg.priorityLabels ?? [];
+const MIDRANK = PRI.length ? (PRI.length - 1) / 2 : 0;
+export const priorityRank = (labels: string[]): number => {
+  const i = PRI.findIndex((p) => labels.includes(p));
+  return i === -1 ? MIDRANK : i;
+};
+
 export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman];
 export const isExcluded = (labels: string[]) =>
   labels.some((l) => EXCLUDE_LABELS.some((x) => l === x || l.startsWith(`${x}:`)));

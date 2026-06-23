@@ -40,7 +40,9 @@ const cfg = {
   install, preflight: preflight.length ? preflight : [run("test")], e2e, imageName: "sandcastle-afk",
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
-  maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[], pollMinutes: 5, idleTimeoutSeconds: 900,
+  maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[],
+  priorityLabels: ["highest", "high", "low", "lowest"],
+  pollMinutes: 5, idleTimeoutSeconds: 900,
 };
 
 if (!has("afk.config.json")) {
@@ -113,6 +115,13 @@ if (args.includes("--labels")) {
       else execSync(`glab label create --name ${JSON.stringify(name)} --color "#${colors[k] ?? "ededed"}"`, { stdio: "ignore" });
     } catch {}
   }
+  const priColors = ["B60205", "D93F0B", "BFD4F2", "C5DEF5"];
+  (C.priorityLabels ?? []).forEach((name: string, i: number) => {
+    try {
+      if (C.platform === "github") execSync(`gh label create ${JSON.stringify(name)} --color ${priColors[i] ?? "ededed"} --force`, { stdio: "ignore" });
+      else execSync(`glab label create --name ${JSON.stringify(name)} --color "#${priColors[i] ?? "ededed"}"`, { stdio: "ignore" });
+    } catch {}
+  });
   console.log("ensured labels exist");
 }
 

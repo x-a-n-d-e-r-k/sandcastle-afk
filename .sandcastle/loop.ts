@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forge, forgeJSON, sh, log, sleep, isExcluded } from "./config.js";
+import { cfg, forge, forgeJSON, sh, log, sleep, isExcluded, priorityRank } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // AFK orchestrator daemon (concurrency = 1), forge-agnostic.
@@ -110,7 +110,7 @@ function pickNextIssue(allPRs: PR[]): Issue | undefined {
     .filter((i) => !rejected.has(`agent/issue-${i.number}`))
     .sort((a, b) => {
       const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
-      return s(a.title) - s(b.title) || a.number - b.number;
+      return priorityRank(a.labels) - priorityRank(b.labels) || s(a.title) - s(b.title) || a.number - b.number;
     })[0];
 }
 
