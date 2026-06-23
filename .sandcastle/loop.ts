@@ -1,6 +1,8 @@
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forge, forgeJSON, sh, log, sleep, isExcluded, priorityRank } from "./config.js";
+import { cfg, forge, forgeJSON, sh, log, sleep, isExcluded, priorityRank, loadAgentRules } from "./config.js";
+
+const RULES = loadAgentRules();
 
 // ---------------------------------------------------------------------------
 // AFK orchestrator daemon (concurrency = 1), forge-agnostic.
@@ -66,15 +68,15 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
 
 const implementOpts = (issue: number): RunOptions => ({
   ...baseRun(`issue-${issue}`, `agent/issue-${issue}`, ".sandcastle/implement.md", cfg.models.implement, true),
-  promptArgs: { ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch },
+  promptArgs: { ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES },
 });
 const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`review-${pr}`, branch, ".sandcastle/review.md", cfg.models.review, false),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
 });
 const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
 });
 
 const getAgentPRs = (): PR[] => forgeJSON<PR[]>("pr-list").filter((p) => p.headRef.startsWith("agent/issue-"));

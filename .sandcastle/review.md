@@ -14,6 +14,10 @@ You are an **independent code reviewer**. You did not write this code. Your appr
 
 !`forge issue-view {{ISSUE_NUMBER}}`
 
+{{AGENT_RULES}}
+
+(If house rules are present above, also flag any change that violates them — e.g. needless code or dependencies.)
+
 # Task
 
 You are checked out on the PR branch.

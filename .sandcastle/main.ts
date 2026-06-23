@@ -1,6 +1,6 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forgeJSON, sh, log, isExcluded, priorityRank } from "./config.js";
+import { cfg, forgeJSON, sh, log, isExcluded, priorityRank, loadAgentRules } from "./config.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
 //   pnpm afk        (loops? no — use `pnpm afk:loop` for continuous)
@@ -32,7 +32,7 @@ const r = await run({
   sandbox: docker({ imageName: cfg.imageName }),
   agent: claudeCode(cfg.models.implement),
   promptFile: ".sandcastle/implement.md",
-  promptArgs: { ISSUE_NUMBER: String(next.number), BASE_BRANCH: cfg.defaultBranch },
+  promptArgs: { ISSUE_NUMBER: String(next.number), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: loadAgentRules() },
   branchStrategy: { type: "branch", branch: `agent/issue-${next.number}`, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
   hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: "forge git-setup" }] } },

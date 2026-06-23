@@ -22,6 +22,8 @@ You are fixing a pull request that a reviewer **requested changes** on. You are 
 
 !`forge issue-view {{ISSUE_NUMBER}}`
 
+{{AGENT_RULES}}
+
 # Task
 
 1. **Understand** each requested change and any CI pipeline failure shown above. For a pipeline failure, evaluate whether it's a real defect or residual flakiness and fix the root cause — pure flakes were already retried before this point, so a failure reaching you is likely real. If feedback conflicts with the issue's acceptance criteria, prefer the criteria and note it in your commit.

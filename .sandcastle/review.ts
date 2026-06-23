@@ -1,6 +1,6 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forgeJSON, sh, log } from "./config.js";
+import { cfg, forgeJSON, sh, log, loadAgentRules } from "./config.js";
 
 // Review one PR/MR:  pnpm afk:review <number>
 const PR = process.argv[2];
@@ -20,7 +20,7 @@ const r = await run({
   sandbox: docker({ imageName: cfg.imageName }),
   agent: claudeCode(cfg.models.review),
   promptFile: ".sandcastle/review.md",
-  promptArgs: { PR_NUMBER: PR, ISSUE_NUMBER: issue },
+  promptArgs: { PR_NUMBER: PR, ISSUE_NUMBER: issue, AGENT_RULES: loadAgentRules() },
   branchStrategy: { type: "branch", branch, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
   hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }] } },

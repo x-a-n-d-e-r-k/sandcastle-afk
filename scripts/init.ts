@@ -42,6 +42,7 @@ const cfg = {
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
   maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[],
   priorityLabels: ["highest", "high", "low", "lowest"],
+  agentRules: [] as string[],
   pollMinutes: 5, idleTimeoutSeconds: 900,
 };
 
@@ -124,5 +125,8 @@ if (args.includes("--labels")) {
   });
   console.log("ensured labels exist");
 }
+
+// Resolve any agent house-rules into the cache (no-op if agentRules is empty).
+try { execSync("npx tsx scripts/resolve-rules.ts", { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } }); } catch (e) { console.warn("agent-rules resolve skipped:", (e as Error).message); }
 
 console.log("\nNext: review afk.config.json, then see playbook.md for identities + branch protection. Build with `pnpm afk:init --build`.");

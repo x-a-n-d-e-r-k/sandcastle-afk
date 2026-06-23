@@ -30,6 +30,7 @@
   "maxPipelineRetry": 2,
   "flakyJobs": [],
   "priorityLabels": ["highest", "high", "low", "lowest"],
+  "agentRules": [],
   "pollMinutes": 5,
   "idleTimeoutSeconds": 900
 }

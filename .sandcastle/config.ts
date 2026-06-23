@@ -35,6 +35,7 @@ export type Cfg = {
   maxPipelineRetry: number;
   flakyJobs: string[];
   priorityLabels: string[];
+  agentRules: string[];
   pollMinutes: number;
   idleTimeoutSeconds: number;
 };
@@ -69,6 +70,16 @@ const MIDRANK = PRI.length ? (PRI.length - 1) / 2 : 0;
 export const priorityRank = (labels: string[]): number => {
   const i = PRI.findIndex((p) => labels.includes(p));
   return i === -1 ? MIDRANK : i;
+};
+
+// House rules injected into every agent prompt. Resolved from cfg.agentRules
+// (paths/URLs) into .sandcastle/agent-rules.md by `pnpm afk:rules` / `afk:init`;
+// this just reads the cache (no network at run time). Empty -> "" (no-op).
+export const loadAgentRules = (): string => {
+  const p = join(ROOT, ".sandcastle", "agent-rules.md");
+  if (!existsSync(p)) return "";
+  const text = readFileSync(p, "utf8").trim();
+  return text ? `# House rules (follow these in addition to the task)\n\n${text}\n` : "";
 };
 
 export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman];

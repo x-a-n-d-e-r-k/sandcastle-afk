@@ -75,6 +75,48 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 The loop is stateless across cycles — it re-derives everything from open PRs + ready issues each poll — so an external merge is detected automatically with no special handling.
 
+## Agent rules (house rules)
+
+`agentRules` injects a shared ruleset into **every agent prompt** — the implementer, the healer, *and* the reviewer all see it. It's a list of **sources**, each a local file path or a URL. `pnpm afk:rules` (also run by `afk:init`) fetches/reads them, concatenates to `.sandcastle/agent-rules.md` (gitignored), and the runners inline it. No network at run time; re-run `afk:rules` to refresh.
+
+```jsonc
+"agentRules": [
+  "https://raw.githubusercontent.com/DietrichGebert/ponytail/main/AGENTS.md",  // a URL
+  ".sandcastle/house-rules.md"                                                 // a local file
+]
+```
+
+### Use cases
+
+**1. Make agents write less code.** Point at [ponytail](https://github.com/DietrichGebert/ponytail)'s ruleset (a YAGNI "laziness ladder" — reach for stdlib / native / a one-liner before building). One line:
+
+```json
+"agentRules": ["https://raw.githubusercontent.com/DietrichGebert/ponytail/main/AGENTS.md"]
+```
+
+Now the implementer stops over-building and the reviewer flags over-engineering — without you running ponytail's plugin in the headless sandbox.
+
+**2. Your own conventions.** Write a local file and reference it:
+
+```json
+"agentRules": [".sandcastle/house-rules.md"]
+```
+```md
+<!-- .sandcastle/house-rules.md -->
+- Use the existing `logger` wrapper; never `console.log`.
+- No new runtime dependencies without a note in the PR body.
+- Match the error-handling pattern in `src/errors.ts`.
+- Reuse the test factories in `test/factories/`; don't invent new ones.
+```
+
+**3. Combine them.** ponytail for terseness *and* your conventions for consistency — list both; they're concatenated in order.
+
+### Notes
+
+- Applies to **implement, heal, and review** (the reviewer enforces the same rules it was written under).
+- It's guidance layered onto the prompt, **not** a hard constraint — the gates (preflight, reviewer, pipeline) still decide what merges, so "write less code" can never bypass correctness, validation, or tests.
+- Empty list (default) = no-op.
+
 ## File map
 
 ```
