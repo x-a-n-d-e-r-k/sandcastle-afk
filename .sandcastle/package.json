@@ -1,0 +1,4 @@
+{
+  "//": "Scopes the AFK runners (top-level await / ESM) to .sandcastle/ so they work even when the host repo is CommonJS-default (no top-level \"type\":\"module\"). Do not remove.",
+  "type": "module"
+}

@@ -44,7 +44,7 @@ The reviewer must be a **different account** than the implementer so its approva
 
 **GitHub:** branch protection on the default branch → **require 1 approval**, **no required status checks** (preflight-only design). Optionally enable auto-merge. The reviewer's approval (different account) satisfies it.
 
-**GitLab:** protect the default branch; add an **MR approval rule requiring 1 approval** and enable **"Prevent approval by the author"** (and ideally "prevent committers from approving"). Note the gap: GitLab has **no native "request changes"** — the loop emulates it with a `changes-requested` label + a marker comment (see `bin/forge`), and the heal step keys off that. If you'd rather use your **pipeline as the gate**, require the pipeline to pass for merge and simplify the reviewer to approve-only.
+**GitLab:** protect the default branch; add an **MR approval rule requiring ≥1 approval** and enable **"Prevent approval by the author"** (and ideally "prevent committers from approving"). **This rule is mandatory in internal mode** — `forge` fails closed (it reports `APPROVED` only when an approval rule is satisfied), so with zero approval rules nothing ever auto-merges. Note the gap: GitLab has **no native "request changes"** — the loop emulates it with a `changes-requested` label + a marker comment (see `bin/forge`), and the heal step keys off that. If you'd rather use your **pipeline as the gate**, require the pipeline to pass for merge and simplify the reviewer to approve-only.
 
 ## 6. Labels
 
@@ -97,3 +97,15 @@ All of these are marked `# VERIFY` in `bin/forge`.
 1. **Preflight is per-repo** — step 3 is real work every time.
 2. **Service-dependent tests** are the hardest portability problem, not the forge.
 3. **Corporate policy** — your org may forbid bot-merges to protected branches, gate token creation behind SSO, or restrict AI tooling on work repos. Check before relying on this at work.
+
+## Troubleshooting (from real bring-ups)
+
+**Self-hosted GitLab (not gitlab.com):** inside the sandbox `glab` only knows `gitlab.com`, so `forge` ops fail with "could not determine base repository." Add `GITLAB_HOST=<your-host>` to `.sandcastle/.env` (it's injected into the sandbox). gitlab.com users skip this.
+
+**GitLab internal mode never merges:** you need an MR **approval rule of ≥1** on the protected branch (see step 5). `forge` fails closed, so with no rule every MR reads `REVIEW_REQUIRED` forever and the loop reviews/​approves/​re-reads in a circle without merging.
+
+**A run keeps reusing stale code / fails identically every cycle:** a leftover `agent/issue-N` branch is being checked out at its old tip instead of fresh `main`. The loop now **auto-deletes** a stale `agent/issue-N` branch before re-dispatching (when there is no open PR for it). Outside the loop, just delete the branch.
+
+**"Image '<name>' not found locally. Build it first…" but the image exists:** Sandcastle's image check reports *any* `docker image inspect` failure (including a transient Docker Desktop daemon blip) as "not found." Confirm with `docker images`; if it is there, just retry — don't rebuild. (Upstream `@ai-hero/sandcastle` issue.)
+
+**macOS host bash is 3.2:** `forge` is written to run under it (empty-array expansions are guarded). If you fork `forge`, keep the `${arr[@]+"${arr[@]}"}` guards.

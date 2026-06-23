@@ -99,16 +99,16 @@ This is a v0.1. Be precise about what has actually been exercised:
 | Component | GitHub | GitLab |
 |---|---|---|
 | `bootstrap.sh` (curl-pipe install + package.json merge) | ✅ | ✅ (platform-agnostic) |
-| `afk:init` (stack detect, Dockerfile/preflight/skill render) | ✅ | 🧪 (glab install path unverified) |
-| `forge` read verbs (issue/pr list, view, diff) | ✅ | ⚠️ |
-| `forge` write verbs (create, approve, merge, label, comment) | 🧪 (map to verbs proven in the source project) | ⚠️ |
-| **Internal** review mode (loop reviews + merges) | ✅ (implement → PR → independent review → merge) | ⚠️ |
+| `afk:init` (stack detect, Dockerfile/preflight/skill render) | ✅ | ✅¹ |
+| `forge` read verbs (issue/pr list, view, diff) | ✅ | ✅¹ |
+| `forge` write verbs (create, approve, merge, label, comment) | 🧪 (map to verbs proven in the source project) | ✅¹ |
+| **Internal** review mode (loop reviews + merges) | ✅ (implement → PR → independent review → merge) | ✅¹ (self-hosted) |
 | **External** review mode (request-changes → heal, aggregated feedback, wait-for-external-merge) | 🧪 | ⚠️ |
 | Heal step / `maxHeal` escalation | 🧪 | ⚠️ |
 | e2e sentinel | 🧪 (needs `playwright install` + a validation run) | 🧪 |
 | Usage-limit guard | 🧪 — **detection regexes are guesses; tune on the first real limit** | 🧪 |
 
-> The single-issue happy path (implement → PR → independent review → merge) and the GitHub `forge` reads were validated in the project this was extracted from. **External mode and the entire GitLab backend have not been run end-to-end** — treat standing them up as a debugging session, not a clean install. `playbook.md` lists the GitLab verify-points.
+> ¹ Validated end-to-end against a **live self-hosted GitLab** instance, internal mode, in [issue #1](https://github.com/x-a-n-d-e-r-k/sandcastle-afk/issues/1) — which surfaced the `forge`/`init` fixes now applied. The GitHub single-issue happy path was validated in the project this was extracted from. **Still untested: GitLab *external* mode and the heal/changes-requested path** — treat those as a debugging session, not a clean install. `playbook.md` lists the remaining verify-points.
 
 ### Caveats that aren't about validation (they're inherent)
 

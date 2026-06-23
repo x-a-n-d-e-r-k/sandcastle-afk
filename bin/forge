@@ -71,8 +71,10 @@ case "$verb" in
       [[ ${#labels[@]} -gt 0 ]] && while read -r f; do args+=("$f"); done < <(gh_label_flags "${labels[@]}")
       gh "${args[@]}" | jq '[.[] | {number, title, labels: [.labels[].name]}]'
     else
-      # VERIFY: glab list JSON shape on your version
-      glab issue list --state "$state" $( [[ ${#labels[@]} -gt 0 ]] && echo --label "$(csv "${labels[@]}")" ) -F json \
+      # glab `issue list`: state is --opened/--closed/--all (no --state); JSON is --output (not -F).
+      gl=(); case "$state" in closed) gl=(--closed);; all) gl=(--all);; esac
+      lbl=(); [[ ${#labels[@]} -gt 0 ]] && lbl=(--label "$(csv "${labels[@]}")")
+      glab issue list ${gl[@]+"${gl[@]}"} ${lbl[@]+"${lbl[@]}"} --output json \
         | jq '[.[] | {number: .iid, title, labels: (.labels // [])}]'
     fi ;;
 
@@ -137,13 +139,22 @@ case "$verb" in
               reviewState: (.reviewDecision | if . == "" or . == null then "REVIEW_REQUIRED" else . end),
               labels: [.labels[].name]}]'
     else
-      # VERIFY: derive review state from approvals + the changes-requested label
-      glab mr list --state "$state" -F json | jq --arg cr "$CHANGES_LABEL" '
-        [.[] | {number: .iid, headRef: .source_branch, merged: (.state == "merged"), labels: (.labels // []),
-          reviewState: (
-            if ((.labels // []) | index($cr)) then "CHANGES_REQUESTED"
-            elif (.approved == true or (.approvals_left // 1) == 0) then "APPROVED"
-            else "REVIEW_REQUIRED" end)}]'
+      # glab `mr list` state is flag-based and does NOT include approval fields.
+      # Query the per-MR /approvals endpoint and FAIL CLOSED: APPROVED only when an
+      # approval RULE is satisfied (approvals_required>0 && approvals_left==0) — so a
+      # project with no approval rule never auto-merges unreviewed.
+      gl=(); case "$state" in closed) gl=(--closed);; merged) gl=(--merged);; all) gl=(--all);; esac
+      glab mr list ${gl[@]+"${gl[@]}"} -F json | jq -c '.[]' | while read -r mr; do
+        iid=$(jq -r '.iid' <<<"$mr"); pid=$(jq -r '.project_id' <<<"$mr")
+        appr="$(glab api "projects/$pid/merge_requests/$iid/approvals" 2>/dev/null || echo '{}')"
+        jq -n --argjson mr "$mr" --argjson appr "$appr" --arg cr "$CHANGES_LABEL" '
+          ($mr.labels // []) as $l |
+          {number: $mr.iid, headRef: $mr.source_branch, merged: ($mr.state == "merged"), labels: $l,
+           reviewState: (
+             if ($l | index($cr)) then "CHANGES_REQUESTED"
+             elif (($appr.approvals_required // 0) > 0 and ($appr.approvals_left // 1) == 0) then "APPROVED"
+             else "REVIEW_REQUIRED" end)}'
+      done | jq -s '.'
     fi ;;
 
   pr-view)
@@ -185,7 +196,7 @@ case "$verb" in
     if [[ "$PLATFORM" == github ]]; then
       gh pr view "$NUM" --json reviews | jq '[.reviews[] | select(.state=="CHANGES_REQUESTED")] | length'
     else
-      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[] | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
+      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
     fi ;;
 
   pr-clear-changes)  # called after a heal push, to reset the gitlab label
@@ -238,7 +249,7 @@ case "$verb" in
       }
     else
       glab mr note list "$NUM" -F json 2>/dev/null \
-        | jq -r '.[] | select((.system // false) | not) | "### note by \(.author.username // "?")\n\(.body)\n"'
+        | jq -r '.[].notes[]? | select((.system // false) | not) | "### note by \(.author.username // "?")\n\(.body)\n"'
     fi ;;
 
   *) die "unknown verb '$verb'. See bin/forge for the verb list." ;;

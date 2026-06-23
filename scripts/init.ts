@@ -56,8 +56,11 @@ console.log(JSON.stringify({ platform: C.platform, defaultBranch: C.defaultBranc
 const GH_INSTALL = `RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \\
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \\
   && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*`;
-const GLAB_INSTALL = `RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/permalink/latest/downloads/glab_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')_linux.tar.gz" -o /tmp/glab.tgz \\
-  && tar -xzf /tmp/glab.tgz -C /usr/local bin/glab && rm /tmp/glab.tgz`;
+const GLAB_INSTALL = `RUN set -eux; \\
+  arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"; \\
+  ver="$(curl -fsSL 'https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases?per_page=1' | jq -r '.[0].tag_name' | sed 's/^v//')"; \\
+  curl -fsSL "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/\${ver}/glab_\${ver}_linux_\${arch}.tar.gz" -o /tmp/glab.tgz; \\
+  tar -xzf /tmp/glab.tgz -C /usr/local bin/glab; rm /tmp/glab.tgz; glab --version`;
 
 let pmPrebake = "# (npm needs no pre-bake)";
 if ((C.packageManager === "pnpm" || C.packageManager === "yarn") && C.packageManagerVersion) {

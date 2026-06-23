@@ -80,6 +80,16 @@ const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
 const getAgentPRs = (): PR[] => forgeJSON<PR[]>("pr-list").filter((p) => p.headRef.startsWith("agent/issue-"));
 const syncBranch = (b: string) => { sh(`git fetch origin ${b}`); sh(`git branch -f ${b} origin/${b}`); };
 
+// A leftover `agent/issue-N` branch (from a failed/incomplete dispatch) gets REUSED by
+// Sandcastle at its old tip instead of being recreated from fresh `main` — so every
+// retry checks out stale code and fails identically. Delete it before a fresh dispatch.
+// Safe: we only dispatch issues with no open PR and no closed-unmerged PR (see pickNextIssue).
+function deleteStaleBranch(issue: number) {
+  const b = `agent/issue-${issue}`;
+  try { if (sh(`git ls-remote --heads origin ${b}`)) { log(`deleting stale ${b}`); sh(`git push origin --delete ${b}`); } } catch {}
+  try { sh(`git branch -D ${b}`); } catch {}
+}
+
 function escalate(pr: number) {
   forge(`pr-label ${pr} --add-label ${L.needsHuman}`);
   forge(`pr-comment ${pr} --body ${JSON.stringify(`AFK: review requested changes ${MAX_HEAL}x without converging. Parking for a human.`)}`);
@@ -148,6 +158,7 @@ while (true) {
       if (next) {
         log(`dispatching #${next.number}: ${next.title}`);
         sh(`git fetch origin ${cfg.defaultBranch}`);
+        deleteStaleBranch(next.number);
         await runGuarded(implementOpts(next.number));
         log(`opened PR for #${next.number}`);
       } else {
