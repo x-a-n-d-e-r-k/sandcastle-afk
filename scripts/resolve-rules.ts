@@ -15,18 +15,21 @@ if (sources.length === 0) {
   process.exit(0);
 }
 
-const parts: string[] = [];
-for (const s of sources) {
-  if (/^https?:\/\//.test(s)) {
-    const r = await fetch(s);
-    if (!r.ok) throw new Error(`fetch ${s} -> ${r.status}`);
-    parts.push(`<!-- source: ${s} -->\n${(await r.text()).trim()}`);
-    console.log(`fetched ${s}`);
-  } else {
-    parts.push(`<!-- source: ${s} -->\n${readFileSync(join(ROOT, s), "utf8").trim()}`);
-    console.log(`read ${s}`);
+// Wrapped in an async IIFE so the top-level await runs under CJS-default host
+// repos too (tsx transforms to CJS there, where top-level await is illegal).
+void (async () => {
+  const parts: string[] = [];
+  for (const s of sources) {
+    if (/^https?:\/\//.test(s)) {
+      const r = await fetch(s);
+      if (!r.ok) throw new Error(`fetch ${s} -> ${r.status}`);
+      parts.push(`<!-- source: ${s} -->\n${(await r.text()).trim()}`);
+      console.log(`fetched ${s}`);
+    } else {
+      parts.push(`<!-- source: ${s} -->\n${readFileSync(join(ROOT, s), "utf8").trim()}`);
+      console.log(`read ${s}`);
+    }
   }
-}
-
-writeFileSync(dest, parts.join("\n\n---\n\n") + "\n");
-console.log(`wrote ${dest} (${sources.length} source${sources.length > 1 ? "s" : ""})`);
+  writeFileSync(dest, parts.join("\n\n---\n\n") + "\n");
+  console.log(`wrote ${dest} (${sources.length} source${sources.length > 1 ? "s" : ""})`);
+})();
