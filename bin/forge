@@ -307,6 +307,27 @@ case "$verb" in
     [[ -n "$NUM" ]] || die "pr-pipeline-retry-mark needs <number>"
     if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:pipeline-retry]"; else glab mr note "$NUM" -m "[forge:pipeline-retry]"; fi ;;
 
+  pr-has-conflicts)  # "true" if the PR/MR has merge conflicts with its target branch, else "false"
+    [[ -n "$NUM" ]] || die "pr-has-conflicts needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json mergeable | jq -r 'if .mergeable == "CONFLICTING" then "true" else "false" end'
+    else
+      read -r pid iid _ < <(gl_ctx "$NUM")
+      glab api "projects/$pid/merge_requests/$iid" | jq -r '.has_conflicts // false'
+    fi ;;
+
+  pr-conflict-retry-count)  # count of [forge:conflict-retry] markers (stateless conflict-resolve budget)
+    [[ -n "$NUM" ]] || die "pr-conflict-retry-count needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json comments | jq '[.comments[] | select(.body | startswith("[forge:conflict-retry]"))] | length'
+    else
+      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:conflict-retry]"))] | length' 2>/dev/null || echo 0
+    fi ;;
+
+  pr-conflict-retry-mark)  # record one conflict-resolve attempt
+    [[ -n "$NUM" ]] || die "pr-conflict-retry-mark needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:conflict-retry]"; else glab mr note "$NUM" -m "[forge:conflict-retry]"; fi ;;
+
   git-setup)  # configure git push credentials for the current platform's token
     if [[ "$PLATFORM" == github ]]; then
       git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'

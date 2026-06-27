@@ -78,6 +78,10 @@ const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
   promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
 });
+const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+  ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES },
+});
 
 const getAgentPRs = (): PR[] => forgeJSON<PR[]>("pr-list").filter((p) => p.headRef.startsWith("agent/issue-"));
 const syncBranch = (b: string) => { sh(`git fetch origin ${b}`); sh(`git branch -f ${b} origin/${b}`); };
@@ -92,9 +96,9 @@ function deleteStaleBranch(issue: number) {
   try { sh(`git branch -D ${b}`); } catch {}
 }
 
-function escalate(pr: number) {
+function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
   forge(`pr-label ${pr} --add-label ${L.needsHuman}`);
-  forge(`pr-comment ${pr} --body ${JSON.stringify(`AFK: review requested changes ${MAX_HEAL}x without converging. Parking for a human.`)}`);
+  forge(`pr-comment ${pr} --body ${JSON.stringify(`AFK: ${reason}. Parking for a human.`)}`);
 }
 
 function pickNextIssue(allPRs: PR[]): Issue | undefined {
@@ -134,7 +138,25 @@ while (true) {
       const branch = pr.headRef;
       const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
 
-      if (pr.reviewState === "APPROVED") {
+      // Conflicts with the base branch block BOTH review and merge, so resolve them
+      // first. A sandbox pass merges the base branch in and fixes the markers; capped
+      // like heal so a conflict the agent can't resolve escalates to a human instead
+      // of wedging the loop (the failure mode that needs manual rescue otherwise).
+      if (forge(`pr-has-conflicts ${pr.number}`) === "true") {
+        const tries = Number(forge(`pr-conflict-retry-count ${pr.number}`)) || 0;
+        if (tries >= MAX_HEAL) {
+          log(`PR #${pr.number} conflict-resolve cap (${tries}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
+          escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} attempts`);
+        } else {
+          log(`PR #${pr.number} conflicts with ${cfg.defaultBranch} -> resolve ${tries + 1}/${MAX_HEAL}`);
+          forge(`pr-conflict-retry-mark ${pr.number}`);
+          syncBranch(branch);
+          await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+          syncBranch(branch);
+          if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
+          else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+        }
+      } else if (pr.reviewState === "APPROVED") {
         if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleep(POLL_MS); }
         else {
           const pl = forgeJSON<{ status: string }>(`pr-pipeline ${pr.number}`);
