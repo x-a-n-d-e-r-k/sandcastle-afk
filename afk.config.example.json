@@ -16,7 +16,8 @@
   "models": {
     "implement": "claude-sonnet-4-6",
     "review": "claude-opus-4-8",
-    "heal": "claude-sonnet-4-6"
+    "heal": "claude-sonnet-4-6",
+    "triage": "claude-sonnet-4-6"
   },
   "labels": {
     "ready": "agent-ready",
@@ -32,5 +33,6 @@
   "priorityLabels": ["highest", "high", "low", "lowest"],
   "agentRules": [],
   "pollMinutes": 5,
-  "idleTimeoutSeconds": 900
+  "idleTimeoutSeconds": 900,
+  "triageIntervalMinutes": 120
 }

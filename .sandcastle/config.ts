@@ -22,7 +22,7 @@ export type Cfg = {
   preflight: string[];
   e2e: string;
   imageName: string;
-  models: { implement: string; review: string; heal: string };
+  models: { implement: string; review: string; heal: string; triage: string };
   labels: {
     ready: string;
     needsFeedback: string;
@@ -38,6 +38,7 @@ export type Cfg = {
   agentRules: string[];
   pollMinutes: number;
   idleTimeoutSeconds: number;
+  triageIntervalMinutes: number;
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
@@ -49,6 +50,68 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Host-side git helper (runs in the repo root by default).
 export const sh = (c: string, cwd: string = ROOT) => execSync(c, { encoding: "utf8", cwd }).trim();
+
+// Worktrees that live under .sandcastle/worktrees/ are sandcastle's own. Parse
+// them out of `git worktree list --porcelain`. Exported for testing the
+// leak-removal logic without touching a live repo.
+export const parseSandcastleWorktrees = (porcelain: string): string[] =>
+  porcelain
+    .split("\n")
+    .filter((l) => l.startsWith("worktree "))
+    .map((l) => l.slice("worktree ".length).trim())
+    .filter((p) => p.includes("/.sandcastle/worktrees/"));
+
+// Clear leftover sandcastle worktrees before any host branch op. Two distinct leaks:
+//
+//   (a) DIR-GONE — a torn-down sandbox container leaves an orphaned entry whose
+//       working dir (the container's /home/agent/workspace) is gone. `git worktree
+//       prune` drops these.
+//   (b) DIR-PRESENT — a run interrupted during sandbox setup (Ctrl-C / crash)
+//       leaves a fully present HOST worktree at .sandcastle/worktrees/agent-issue-N
+//       with the agent branch checked out. prune CANNOT clear it (the dir still
+//       exists), so that checked-out branch makes `git branch -f`/`git branch -D`
+//       fail ("cannot force update/delete the branch ... used by worktree") and
+//       wedges syncBranch/deleteStaleBranch every cycle — the loop then errors and
+//       sleeps 60s forever. This was the gap behind the recurring blocker.
+//
+// At concurrency=1 the loop only touches host git between its own container runs,
+// so no sandcastle worktree is ever legitimately live here — force-remove any that
+// remain (unlock first if git reports it locked). Safe: the agent's real work lives
+// on its pushed branch / PR; the worktree is a disposable local checkout.
+export const pruneWorktrees = (run: (c: string) => string = sh) => {
+  try {
+    run("git worktree prune"); // (a) dir-gone
+    for (const p of parseSandcastleWorktrees(run("git worktree list --porcelain"))) {
+      log(`removing leaked sandcastle worktree ${p}`);
+      try {
+        run(`git worktree remove --force ${JSON.stringify(p)}`); // (b) dir-present
+      } catch {
+        try { run(`git worktree unlock ${JSON.stringify(p)}`); } catch {}
+        try { run(`git worktree remove --force ${JSON.stringify(p)}`); }
+        catch (e) { log(`could not remove leaked worktree ${p}: ${(e as Error).message}`); }
+      }
+    }
+    run("git worktree prune"); // drop any entry left dangling by the removals
+  } catch {}
+};
+
+// Defensive: an interrupted sandbox run can leave the HOST repo checked out on an agent
+// branch (often with a half-applied dirty tree). Then `git branch -f`/`git branch -D` on
+// that branch fail ("cannot force update/delete the current branch") and the loop wedges
+// every cycle — prune can't help because the worktree exists. The loop only touches host
+// git between its own container-isolated runs, so the host should always be on
+// defaultBranch here; snap it back (force, discarding the junk tree) if not. The agent's
+// real work lives on its pushed branch / PR, so discarding the host working tree is safe.
+export const ensureHostOnDefaultBranch = () => {
+  try {
+    if (sh("git rev-parse --abbrev-ref HEAD") !== cfg.defaultBranch) {
+      log(`host repo not on ${cfg.defaultBranch} — resetting (work is safe on the pushed branch/PR)`);
+      sh(`git checkout -f ${cfg.defaultBranch}`);
+    }
+  } catch (e) {
+    log(`ensureHostOnDefaultBranch failed: ${(e as Error).message}`);
+  }
+};
 
 // All forge calls go through here. `tokenEnv` lets a single call use a
 // different identity (e.g. the reviewer): forge("pr-approve 5", { GH_TOKEN: reviewToken }).
