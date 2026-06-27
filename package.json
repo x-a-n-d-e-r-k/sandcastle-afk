@@ -10,6 +10,7 @@
     "afk": "tsx .sandcastle/main.ts",
     "afk:review": "tsx .sandcastle/review.ts",
     "afk:loop": "tsx .sandcastle/loop.ts",
+    "afk:stop": "tsx .sandcastle/stop.ts",
     "afk:sentinel": "tsx .sandcastle/sentinel.ts",
     "typecheck": "tsc --noEmit"
   },
