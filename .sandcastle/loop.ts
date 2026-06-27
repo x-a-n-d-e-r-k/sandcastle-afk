@@ -169,16 +169,17 @@ async function main(): Promise<void> {
       sh(`git fetch origin ${cfg.defaultBranch}`);
       const all = getAgentPRs();
       // Multi-loop (#8): only drive PRs whose issue THIS clone owns (carries our claim).
-      // ownedIssues = the ready issues we've claimed; single-loop (MINE === "") leaves it
-      // null so isMine is always true and the loop owns every PR (unchanged behavior).
+      // Query the claim label directly (not the `ready` set) so ownership survives even if
+      // `ready` is stripped once a PR opens. Single-loop (MINE === "") leaves it null so
+      // isMine is always true and the loop owns every PR (unchanged behavior).
       const ownedIssues = MINE
-        ? new Set(
-            forgeJSON<Issue[]>(`issue-list --label ${L.ready}`)
-              .filter((i) => i.labels.includes(MINE))
-              .map((i) => i.number),
-          )
+        ? new Set(forgeJSON<Issue[]>(`issue-list --label ${MINE}`).map((i) => i.number))
         : null;
-      const isMine = (headRef: string) => !ownedIssues || ownedIssues.has(issueNumOf(headRef));
+      const isMine = (headRef: string) => {
+        if (!ownedIssues) return true;
+        const n = issueNumOf(headRef);
+        return !Number.isNaN(n) && ownedIssues.has(n);
+      };
       const active = all.filter((p) => !p.labels.includes(L.needsHuman) && isMine(p.headRef));
 
       if (DRY) {

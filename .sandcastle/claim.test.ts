@@ -15,7 +15,7 @@ if (!existsSync(join(ROOT, "afk.config.json"))) {
 }
 
 const { pickNextIssue, claimWinner } = await import("./claim.js");
-const { isExcluded } = await import("./config.js");
+const { isExcluded, isValidLoopId } = await import("./config.js");
 
 // A PickDeps with no-op writes and a recorded edit log; override per test.
 const deps = (over: Partial<PickDeps> & { listReady: () => Issue[] }): PickDeps & { edits: string[] } => {
@@ -38,6 +38,14 @@ test("isExcluded skips `working` and `working:<id>` claims", () => {
   assert.equal(isExcluded(["working"]), true);
   assert.equal(isExcluded(["working:b"]), true);
   assert.equal(isExcluded(["agent-ready"]), false);
+});
+
+test("isValidLoopId: accepts safe tokens, rejects shell metacharacters", () => {
+  assert.equal(isValidLoopId("a"), true);
+  assert.equal(isValidLoopId("loop_2-b"), true);
+  assert.equal(isValidLoopId("a; rm -rf ."), false); // injection attempt
+  assert.equal(isValidLoopId("a b"), false); // space splits the forge arg
+  assert.equal(isValidLoopId(""), false);
 });
 
 test("claimWinner: lowest LOOP_ID among working:* wins; none => undefined", () => {

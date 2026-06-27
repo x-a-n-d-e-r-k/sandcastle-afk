@@ -21,6 +21,13 @@ if (existsSync(ENV_FILE) && typeof loadEnvFile === "function") {
 // `working:<LOOP_ID>`; `working` (the base) folds into the pickup-exclusion set below.
 export const LOOP_ID = (process.env.LOOP_ID ?? "").trim();
 export const WORKING = "working";
+// LOOP_ID becomes the label `working:<LOOP_ID>` AND is interpolated into `forge` shell
+// args, so constrain it to a safe token (no spaces/metacharacters → no injection, no
+// malformed labels). Refuse to start on a bad value rather than mangle a live command.
+export const isValidLoopId = (id: string): boolean => /^[A-Za-z0-9_-]+$/.test(id);
+if (LOOP_ID && !isValidLoopId(LOOP_ID)) {
+  throw new Error(`Invalid LOOP_ID "${LOOP_ID}": use only letters, digits, '-' or '_'.`);
+}
 
 const CONFIG_PATH = join(ROOT, "afk.config.json");
 
