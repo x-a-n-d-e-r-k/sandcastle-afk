@@ -50,6 +50,7 @@ npm run afk:loop       # the daemon: dispatch -> review -> heal -> merge, foreve
 | `afk` | Single dispatch: implement the next `agent-ready` issue → PR/MR |
 | `afk:review <n>` | Independently review one PR/MR (different model + reviewer identity) |
 | `afk:loop` | The orchestrator daemon (concurrency 1) — dispatch, review, heal, merge |
+| `afk:claims` | Read-only ownership dashboard for concurrent loops — who claimed what; non-zero exit if contested |
 | `afk:sentinel` | Out-of-band e2e regression sentinel (files agent-ready issues for genuine failures) |
 
 ## Staying up to date (`afk:update`)
@@ -68,6 +69,14 @@ pnpm afk:update --from ../sandcastle-afk   # sync from a local checkout instead 
 **Source.** By default it syncs from `https://github.com/x-a-n-d-e-r-k/sandcastle-afk`. Pin a different source with the `layerRepo` field in `afk.config.json`, or override per-run with `--from <git-url|path>`. URLs are shallow-cloned to a temp dir; the synced layer SHA is recorded in `.sandcastle/.layer-sync.json` (gitignored local state).
 
 **Base bump caveat.** With `--base-latest` (or when the layer's pin moves), the `@ai-hero/sandcastle` version in your `package.json` changes — you must then run `pnpm install --frozen-lockfile` **while the loop is stopped** (don't reinstall mid-run). `afk:update` refuses to run while a loop process is detected and on a dirty tree (override either with `--force`). After updating: review `git diff`, install if the base changed, then `pnpm afk:stop && pnpm afk:loop`.
+
+## Concurrent loops (multi-clone)
+
+Run **N loops over one backlog** — e.g. two clones of the repo on the same machine — without collisions: no two loops pick the same issue or drive the same PR. Give each clone a unique `LOOP_ID` in its own `.sandcastle/.env` (`LOOP_ID=a`, `LOOP_ID=b`, …). **Leaving `LOOP_ID` unset = today's single-loop behavior, unchanged** (no claims written, the loop owns everything).
+
+How it works: a loop **claims** an issue on pickup by adding the label `working:<LOOP_ID>`. That claim scopes both halves of the cycle — claimed issues are excluded from every loop's fresh pickup, and a loop only reviews/heals/merges PRs for issues carrying *its own* claim. A simultaneous claim is resolved deterministically (**lowest `LOOP_ID` wins**; the loser drops its label and retries); stagger the loops' start by ~30–60s to make races rare. A loop that claimed an issue then crashed before opening a PR resumes its own claim on restart. Inspect live ownership with `pnpm afk:claims`.
+
+> `LOOP_ID` is read by the **host** daemon, so `.sandcastle/.env` is auto-loaded on the host (it does not override an explicit `export LOOP_ID=`). For a strict zero-window guarantee you'd need a shared lock (e.g. a conditional DynamoDB put) — not needed for the 2–3 loop case.
 
 ## The `forge` adapter
 
@@ -141,9 +150,11 @@ Now the implementer stops over-building and the reviewer flags over-engineering 
 bin/forge                     the GitHub/GitLab adapter (the seam)
 afk.config.example.json       config schema
 .sandcastle/
-  config.ts                   loads config, exposes forge() + helpers
+  config.ts                   loads config (+ host .env), exposes forge() + helpers
+  claim.ts                    concurrent-loop issue claiming (testable, no sandbox)
+  claim.test.ts               pure unit tests for claiming (pnpm test)
   implement.md review.md heal.md   the agent prompts (forge-routed)
-  main.ts review.ts loop.ts sentinel.ts   the runners
+  main.ts review.ts loop.ts claims.ts sentinel.ts   the runners
   Dockerfile.template         rendered by init
 scripts/init.ts               the wizard
 skills/agent-ready-issue/     the issue-authoring skill (templated)
