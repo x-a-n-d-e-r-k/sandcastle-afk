@@ -11,8 +11,10 @@
     "afk": "tsx .sandcastle/main.ts",
     "afk:review": "tsx .sandcastle/review.ts",
     "afk:loop": "tsx .sandcastle/loop.ts",
+    "afk:claims": "tsx .sandcastle/claims.ts",
     "afk:stop": "tsx .sandcastle/stop.ts",
     "afk:sentinel": "tsx .sandcastle/sentinel.ts",
+    "test": "node --import tsx --test .sandcastle/claim.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

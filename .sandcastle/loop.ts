@@ -1,7 +1,8 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forge, forgeJSON, sh, log, sleep, isExcluded, priorityRank, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch } from "./config.js";
+import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch } from "./config.js";
+import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 
@@ -118,29 +119,6 @@ function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x wi
   forge(`pr-comment ${pr} --body ${JSON.stringify(`AFK: ${reason}. Parking for a human.`)}`);
 }
 
-function pickNextIssue(allPRs: PR[]): Issue | undefined {
-  const issues = forgeJSON<Issue[]>(`issue-list --label ${L.ready}`);
-  const openHeads = new Set(allPRs.map((p) => p.headRef));
-  // Any CLOSED agent PR means its issue is already resolved — merged (work shipped) or
-  // closed-unmerged (rejected by a human) — so never re-dispatch it. Excluding *merged*
-  // PRs (not just rejected ones) also closes a race: right after a merge the loop loops
-  // back to here before GitHub has auto-closed the linked issue, so the just-merged issue
-  // can momentarily still look open + ready and get picked again (observed with #380).
-  const resolved = new Set(
-    forgeJSON<PR[]>("pr-list --state closed")
-      .filter((p) => p.headRef.startsWith("agent/issue-"))
-      .map((p) => p.headRef),
-  );
-  return issues
-    .filter((i) => !isExcluded(i.labels))
-    .filter((i) => !openHeads.has(`agent/issue-${i.number}`))
-    .filter((i) => !resolved.has(`agent/issue-${i.number}`))
-    .sort((a, b) => {
-      const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
-      return priorityRank(a.labels) - priorityRank(b.labels) || s(a.title) - s(b.title) || a.number - b.number;
-    })[0];
-}
-
 // Deterministic blocker-sweep backstop, bound to forge. Runs synchronously between
 // loop runs (concurrency=1) so it never races a live container. issue-list omits body,
 // so we issue-view each blocked issue (and each blocker) for body + closed-state.
@@ -190,11 +168,23 @@ async function main(): Promise<void> {
       pruneWorktrees(); // clear worktrees leaked by torn-down sandbox containers before any branch op
       sh(`git fetch origin ${cfg.defaultBranch}`);
       const all = getAgentPRs();
-      const active = all.filter((p) => !p.labels.includes(L.needsHuman));
+      // Multi-loop (#8): only drive PRs whose issue THIS clone owns (carries our claim).
+      // Query the claim label directly (not the `ready` set) so ownership survives even if
+      // `ready` is stripped once a PR opens. Single-loop (MINE === "") leaves it null so
+      // isMine is always true and the loop owns every PR (unchanged behavior).
+      const ownedIssues = MINE
+        ? new Set(forgeJSON<Issue[]>(`issue-list --label ${MINE}`).map((i) => i.number))
+        : null;
+      const isMine = (headRef: string) => {
+        if (!ownedIssues) return true;
+        const n = issueNumOf(headRef);
+        return !Number.isNaN(n) && ownedIssues.has(n);
+      };
+      const active = all.filter((p) => !p.labels.includes(L.needsHuman) && isMine(p.headRef));
 
       if (DRY) {
         if (active.length) { const pr = active[0]; log(`DRY: in-flight PR #${pr.number} (${pr.headRef}) state=${pr.reviewState}`); }
-        else { const n = pickNextIssue(all); log(n ? `DRY: would dispatch #${n.number}: ${n.title}` : "DRY: idle"); }
+        else { const n = await pickNextIssue(all, realPickDeps(L.ready, DRY)); log(n ? `DRY: would dispatch #${n.number}: ${n.title}` : "DRY: idle"); }
         process.exit(0);
       }
 
@@ -279,7 +269,7 @@ async function main(): Promise<void> {
           else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
         }
       } else {
-        const next = pickNextIssue(all);
+        const next = await pickNextIssue(all, realPickDeps(L.ready, DRY));
         if (next) {
           log(`dispatching #${next.number}: ${next.title}`);
           sh(`git fetch origin ${cfg.defaultBranch}`);
@@ -307,6 +297,6 @@ async function main(): Promise<void> {
 }
 
 // Only run the daemon when this module is the process entry point. Importing it — e.g.
-// from the vitest suite to assert `triageOpts`'s shape — must NOT start the loop.
+// from the test suite to assert `triageOpts`'s shape — must NOT start the loop.
 const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) await main();

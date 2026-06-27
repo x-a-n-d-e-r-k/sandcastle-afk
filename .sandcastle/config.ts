@@ -5,6 +5,30 @@ import { dirname, join } from "node:path";
 
 // Repo root, resolved from this file at .sandcastle/config.ts
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Host env-autoload (#8). LOOP_ID and friends live in .sandcastle/.env, which upstream
+// only injects into the Docker sandbox — never the HOST daemon (loop.ts) that reads
+// LOOP_ID. Load it here so host-side code sees those vars. `loadEnvFile` (Node ≥20.12)
+// does NOT override already-set vars, so an explicit `export LOOP_ID=` still wins.
+const ENV_FILE = join(ROOT, ".sandcastle", ".env");
+const loadEnvFile = (process as unknown as { loadEnvFile?: (p: string) => void }).loadEnvFile;
+if (existsSync(ENV_FILE) && typeof loadEnvFile === "function") {
+  try { loadEnvFile(ENV_FILE); } catch { /* malformed .env — keep ambient env */ }
+}
+
+// Per-clone loop identity for concurrent backlog claiming (#8). Unset => single-loop
+// mode (no claims, owns everything — today's behavior). The full claim label is
+// `working:<LOOP_ID>`; `working` (the base) folds into the pickup-exclusion set below.
+export const LOOP_ID = (process.env.LOOP_ID ?? "").trim();
+export const WORKING = "working";
+// LOOP_ID becomes the label `working:<LOOP_ID>` AND is interpolated into `forge` shell
+// args, so constrain it to a safe token (no spaces/metacharacters → no injection, no
+// malformed labels). Refuse to start on a bad value rather than mangle a live command.
+export const isValidLoopId = (id: string): boolean => /^[A-Za-z0-9_-]+$/.test(id);
+if (LOOP_ID && !isValidLoopId(LOOP_ID)) {
+  throw new Error(`Invalid LOOP_ID "${LOOP_ID}": use only letters, digits, '-' or '_'.`);
+}
+
 const CONFIG_PATH = join(ROOT, "afk.config.json");
 
 if (!existsSync(CONFIG_PATH)) {
@@ -145,6 +169,8 @@ export const loadAgentRules = (): string => {
   return text ? `# House rules (follow these in addition to the task)\n\n${text}\n` : "";
 };
 
-export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman];
+// `working` is included so a claimed issue (`working` or any `working:<id>` sub-label) is
+// skipped on fresh pickup — its owning loop resumes it via the claim path, not here.
+export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman, WORKING];
 export const isExcluded = (labels: string[]) =>
   labels.some((l) => EXCLUDE_LABELS.some((x) => l === x || l.startsWith(`${x}:`)));
