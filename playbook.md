@@ -12,6 +12,8 @@
 
 The loop runs *inside* the target repo (Sandcastle operates on the current git repo). Copy `.sandcastle/`, `bin/`, `skills/`, `scripts/` into your repo, and merge this repo's `package.json` `dependencies` (`@ai-hero/sandcastle`) + `devDependencies` (`tsx`, `typescript`) + the `afk:*` scripts into yours. Then `npm install` (or pnpm/yarn).
 
+**Staying current later:** `pnpm afk:update` re-syncs the layer-tracked files (the four dirs above) and the `afk:*` scripts into your project without touching `afk.config.json`, `.sandcastle/.env*`, or the generated `Dockerfile`/`preflight.sh`. Run `pnpm afk:update --dry-run` first to preview. With `--base-latest` it also bumps `@ai-hero/sandcastle` — then run `pnpm install --frozen-lockfile` **while the loop is stopped**. Pin a non-default source via `layerRepo` in `afk.config.json` or `--from <url|path>`. See README → "Staying up to date".
+
 ## 2. Configure
 
 ```bash

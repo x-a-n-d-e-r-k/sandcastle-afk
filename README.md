@@ -46,10 +46,28 @@ npm run afk:loop       # the daemon: dispatch -> review -> heal -> merge, foreve
 | Command | What it does |
 |---|---|
 | `afk:init [--build] [--labels]` | Detect stack, write `afk.config.json`, render Dockerfile + preflight, install the skill |
+| `afk:update [--dry-run] [--base-latest] [--from <src>] [--force]` | Pull layer updates into this project (preserves config/secrets); optionally bump the `@ai-hero/sandcastle` base |
 | `afk` | Single dispatch: implement the next `agent-ready` issue → PR/MR |
 | `afk:review <n>` | Independently review one PR/MR (different model + reviewer identity) |
 | `afk:loop` | The orchestrator daemon (concurrency 1) — dispatch, review, heal, merge |
 | `afk:sentinel` | Out-of-band e2e regression sentinel (files agent-ready issues for genuine failures) |
+
+## Staying up to date (`afk:update`)
+
+The loop's tooling is a **layer** you copy into your project (via `bootstrap.sh`). When the layer ships fixes or new commands, `pnpm afk:update` pulls them in **without clobbering your local config or secrets**:
+
+```bash
+pnpm afk:update --dry-run      # show what WOULD change; writes nothing
+pnpm afk:update                # apply layer updates
+pnpm afk:update --base-latest  # also bump @ai-hero/sandcastle to npm's latest
+pnpm afk:update --from ../sandcastle-afk   # sync from a local checkout instead of the default repo
+```
+
+**Managed vs preserved.** `afk:update` overwrites the files the layer *tracks* under `bin/`, `.sandcastle/`, `skills/`, and `scripts/`, and merges the layer's `afk:*` scripts into your `package.json`. It **never** touches your `afk.config.json`, `.sandcastle/.env*`, the generated `Dockerfile`/`preflight.sh`, or project-only files the layer doesn't ship (e.g. your `.sandcastle/house-rules.md`) — they survive untouched (it does not mirror-delete).
+
+**Source.** By default it syncs from `https://github.com/x-a-n-d-e-r-k/sandcastle-afk`. Pin a different source with the `layerRepo` field in `afk.config.json`, or override per-run with `--from <git-url|path>`. URLs are shallow-cloned to a temp dir; the synced layer SHA is recorded in `.sandcastle/.layer-sync.json` (gitignored local state).
+
+**Base bump caveat.** With `--base-latest` (or when the layer's pin moves), the `@ai-hero/sandcastle` version in your `package.json` changes — you must then run `pnpm install --frozen-lockfile` **while the loop is stopped** (don't reinstall mid-run). `afk:update` refuses to run while a loop process is detected and on a dirty tree (override either with `--force`). After updating: review `git diff`, install if the base changed, then `pnpm afk:stop && pnpm afk:loop`.
 
 ## The `forge` adapter
 
@@ -57,7 +75,7 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 ## Configuration (`afk.config.json`)
 
-`platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), **`priorityLabels`** (ordered most-urgent-first, default `["highest","high","low","lowest"]`), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+`layerRepo` (optional — the sandcastle-afk source `pnpm afk:update` pulls from; defaults to this repo), `platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), **`priorityLabels`** (ordered most-urgent-first, default `["highest","high","low","lowest"]`), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
 
 **Prioritizing issues:** the loop dispatches by **priority label first**, then `fix:`-titled before others, then oldest issue number. Add a `priorityLabels` label (e.g. `highest`/`high`/`low`/`lowest`) to bump or sink an issue; an `agent-ready` issue with **no** priority label sits in the middle (between `high` and `low`). `pnpm afk:init --labels` creates the priority labels. (Since the loop only pulls `agent-ready` and works one at a time, applying/withholding `agent-ready` is itself a coarse queue control.)
 

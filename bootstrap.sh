@@ -42,6 +42,7 @@ node "$TMP/afk/scripts/merge-package-json.cjs" "$TMP/afk/package.json"
 echo "Updating .gitignore..."
 for line in "node_modules/" ".pnpm-store/" ".sandcastle/.env" ".sandcastle/.env.review" \
             ".sandcastle/logs/" ".sandcastle/worktrees/" ".sandcastle/e2e-worktree/" \
+            ".sandcastle/.layer-sync.json" \
             ".sandcastle/Dockerfile" ".sandcastle/preflight.sh" "afk.config.json" ".claude/"; do
   grep -qxF "$line" .gitignore 2>/dev/null || echo "$line" >> .gitignore
 done
