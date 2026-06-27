@@ -6,6 +6,7 @@ node_modules/
 .sandcastle/worktrees/
 .sandcastle/e2e-worktree/
 afk.config.json
+.sandcastle/.layer-sync.json
 .sandcastle/agent-rules.md
 *.log
 

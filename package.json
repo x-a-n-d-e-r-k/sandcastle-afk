@@ -6,6 +6,7 @@
   "description": "An opinionated, forge-agnostic AFK-developer loop on top of @ai-hero/sandcastle: file an agent-ready issue, an agent implements it with TDD, opens a PR/MR, an independent reviewer approves, it merges. GitHub and GitLab.",
   "scripts": {
     "afk:init": "tsx scripts/init.ts",
+    "afk:update": "tsx scripts/update.ts",
     "afk:rules": "tsx scripts/resolve-rules.ts",
     "afk": "tsx .sandcastle/main.ts",
     "afk:review": "tsx .sandcastle/review.ts",
