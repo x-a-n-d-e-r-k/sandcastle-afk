@@ -3,7 +3,7 @@ import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandc
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch } from "./config.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
-import { shouldRunTriage, sweepBlockedIssues, TRIAGE_MARKER } from "./triage.js";
+import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 
 const RULES = loadAgentRules();
@@ -128,7 +128,7 @@ function runTriageSweep() {
   const detail = (n: number) => forgeJSON<Detail>(`issue-view ${n}`);
   const promoted = sweepBlockedIssues({
     listBlocked: () => blockedNums.map(detail),
-    isClosed: (n) => detail(n).state === "closed",
+    isClosed: (n) => isIssueClosed(detail(n)),
     promote: (n) => { forge(`issue-edit ${n} --add-label ${L.ready} --remove-label blocked`); },
     hasMarkerComment: (n) => forge(`issue-comments ${n}`).includes(TRIAGE_MARKER),
     comment: (n, body) => { forge(`issue-comment ${n} --body ${JSON.stringify(body)}`); },

@@ -19,6 +19,12 @@ export function triageAction(
 
 type BlockedIssue = { number: number; body?: string; labels: string[] };
 
+// The blocker-sweep's closed-check, as a pure function over an issue detail so the REAL
+// wiring (not a test mock) is covered. `state` comes from `forge issue-view`; if forge
+// ever omits it again (the bug this fixes), `d.state` is undefined and this is false —
+// the regression the triage test locks. Compares against forge's lowercased vocabulary.
+export const isIssueClosed = (d: { state?: string }): boolean => d.state === "closed";
+
 // Cadence guard: true on the first idle pass (lastTriageAtMs === null) or once the
 // interval has fully elapsed. `>=` makes the interval boundary inclusive.
 export function shouldRunTriage(

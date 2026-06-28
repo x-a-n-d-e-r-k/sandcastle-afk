@@ -90,10 +90,13 @@ case "$verb" in
 
   issue-view)
     [[ -n "$NUM" ]] || die "issue-view needs <number>"
+    # `state` (lowercased open/closed) feeds the loop's blocker-sweep isClosed check —
+    # it MUST be emitted or the sweep never unblocks anything. gh returns OPEN/CLOSED;
+    # glab returns opened/closed. Normalize both to open/closed.
     if [[ "$PLATFORM" == github ]]; then
-      gh issue view "$NUM" --json number,title,body,labels | jq '{number, title, body, labels: [.labels[].name]}'
+      gh issue view "$NUM" --json number,title,body,labels,state | jq '{number, title, body, labels: [.labels[].name], state: (.state | ascii_downcase)}'
     else
-      glab issue view "$NUM" -F json | jq '{number: .iid, title, body: (.description // ""), labels: (.labels // [])}'
+      glab issue view "$NUM" -F json | jq '{number: .iid, title, body: (.description // ""), labels: (.labels // []), state: (if .state == "closed" then "closed" else "open" end)}'
     fi ;;
 
   issue-create)
