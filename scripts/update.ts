@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statS
 import { execSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { applyOverlayManagement, OVERLAY_IGNORE } from "./overlay.js";
 
 // pnpm afk:update [--dry-run] [--base-latest] [--from <url|path>] [--force]
 //   Pulls layer (sandcastle-afk) updates into THIS project without clobbering
@@ -138,6 +139,7 @@ try {
     console.log(`\n[dry-run] base @ai-hero/sandcastle: ${currentBase} -> ${targetBase || "(unchanged)"}${baseChanges ? "" : " (no change)"}`);
     console.log(`[dry-run] afk:* script changes: ${scriptChanges.length}`);
     for (const [k, v] of scriptChanges) console.log(`  ~ ${k}: ${projScripts[k] ?? "(new)"} -> ${v}`);
+    console.log(`\n[dry-run] overlay: would refresh the managed .gitignore block (${OVERLAY_IGNORE.length} paths), untrack any tracked overlay files, write .sandcastle/.managed.json`);
     console.log("\n[dry-run] nothing written.");
     process.exit(0);
   }
@@ -193,13 +195,12 @@ try {
     baseVersion: targetBase || currentBase,
   };
   writeFileSync(join(ROOT, ".sandcastle/.layer-sync.json"), JSON.stringify(syncRecord, null, 2) + "\n");
-  // ensure the local-state file is gitignored
-  const gi = join(ROOT, ".gitignore");
-  const giLine = ".sandcastle/.layer-sync.json";
-  if (existsSync(gi)) {
-    const lines = readFileSync(gi, "utf8").split("\n");
-    if (!lines.some((l) => l.trim() === giLine)) writeFileSync(gi, readFileSync(gi, "utf8").replace(/\n?$/, "\n") + giLine + "\n");
-  }
+
+  // ---- 8. overlay management (#13) -----------------------------------------
+  // Refresh the managed .gitignore block, untrack any overlay files a prior
+  // vendor-and-commit left tracked (kept on disk), and write the managed-file manifest.
+  // Subsumes the old one-off .layer-sync.json self-ignore — `.sandcastle/` now covers it.
+  applyOverlayManagement(ROOT, (c) => sh(c), console.log);
 
   // ---- 8. summary + next steps ---------------------------------------------
   console.log("\n=== afk:update complete ===");

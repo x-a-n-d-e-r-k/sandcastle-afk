@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, chmodSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
+import { applyOverlayManagement, OVERLAY_IGNORE } from "./overlay.js";
 
 // pnpm afk:init [--build] [--labels]
 //   detects the stack, writes afk.config.json, renders the Dockerfile,
@@ -128,5 +129,12 @@ if (args.includes("--labels")) {
 
 // Resolve any agent house-rules into the cache (no-op if agentRules is empty).
 try { execSync("npx tsx scripts/resolve-rules.ts", { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } }); } catch (e) { console.warn("agent-rules resolve skipped:", (e as Error).message); }
+
+// Overlay management (#13): the installed layer is a runtime overlay — gitignore it (so a
+// layer refresh never shows as a tracked diff) and write the managed-file manifest. CI-class
+// files (auto-unblock workflow + scripts) stay committed.
+const initSh = (c: string) => execSync(c, { encoding: "utf8" }).trim();
+applyOverlayManagement(ROOT, initSh, console.log);
+console.log(`managed .gitignore + overlay manifest written (${OVERLAY_IGNORE.length} ignore paths)`);
 
 console.log("\nNext: review afk.config.json, then see playbook.md for identities + branch protection. Build with `pnpm afk:init --build`.");
