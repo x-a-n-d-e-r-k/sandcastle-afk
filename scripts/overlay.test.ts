@@ -46,4 +46,6 @@ test("managedManifest classifies overlay as ignore and CI files as commit", () =
   // auto-unblock must stay committed — the GitHub Action runs it from the repo.
   for (const p of OVERLAY_COMMIT) assert.equal(byPath[p], "commit", `${p} should be commit-class`);
   assert.ok(!OVERLAY_IGNORE.some((p) => p.startsWith("scripts/auto-unblock")), "auto-unblock must not be ignore-class");
+  // the layer's own scripts/ test files are overlay, not consumer-tracked.
+  assert.equal(byPath["scripts/*.test.ts"], "ignore", "layer scripts/ test files must be ignore-class");
 });

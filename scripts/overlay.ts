@@ -25,6 +25,9 @@ export const OVERLAY_IGNORE: string[] = [
   "scripts/resolve-rules.ts",
   "scripts/overlay.ts",
   "scripts/merge-package-json.cjs",
+  // The layer ships its own *.test.ts under scripts/ (e.g. overlay.test.ts); those are
+  // overlay too. (.sandcastle/ test files are already covered by the `.sandcastle/` entry.)
+  "scripts/*.test.ts",
 ];
 
 // `commit`-class managed paths: kept tracked. The auto-unblock workflow runs these from
