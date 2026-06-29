@@ -18,6 +18,7 @@ Write the issue so **success is mechanically checkable**. Every acceptance crite
 - **One iteration?** Completable in a single focused run (~one PR, a handful of files). If it is a multi-part epic or tracking bucket, do NOT make it agent-ready: label it `{{EPIC_LABEL}}` and split it into discrete agent-ready children.
 - **Self-contained?** All context lives in the repo or the issue. No "ask so-and-so".
 - **Decided?** Real open questions make the agent guess wrong. Put them under "Open questions" and label `{{NEEDS_FEEDBACK_LABEL}}` instead of `{{READY_LABEL}}` until answered.
+- **Blocked?** Does it depend on another issue landing first (a prerequisite API, shared files, a sequential migration)? If so it is `blocked`, not `{{READY_LABEL}}` — and it MUST carry the blocker marker (see Step 5). Mark only the head of a chain `{{READY_LABEL}}`.
 
 ## Step 2 — Interview (ask only what is missing)
 
@@ -43,13 +44,28 @@ Before opening the request, all of these must be green from the repo root: {{GAT
 
 ## Step 5 — Label and create
 
-- Fully specified → `{{READY_LABEL}}`.
+- Fully specified, **not waiting on another issue** → `{{READY_LABEL}}`.
+- **Depends on another issue closing first** → `blocked` (NOT `{{READY_LABEL}}`) + the blocker marker below. The loop auto-promotes it to `{{READY_LABEL}}` once every listed blocker is closed.
 - Open questions → `{{NEEDS_FEEDBACK_LABEL}}` (loop skips it until you answer and remove the label).
 - Epic / idea / tracking → `{{EPIC_LABEL}}` / `{{IDEA_LABEL}}` (excluded from the loop).
 - Optional priority: add a priority label (e.g. `highest`/`high`/`low`/`lowest`) to control dispatch order. No priority label = middle.
 
 Create as the **human** (not a bot token):
 `bash .claude/skills/agent-ready-issue/create-issue.sh "<title>" <body-file>`
+
+### Blocker dependencies (required notation)
+
+If the issue is `blocked`, its body MUST carry the canonical marker near the **top**:
+
+```
+<!-- blocker-deps: #123, #456 -->
+```
+
+Both unblock paths parse it via `scripts/auto-unblock/parse-blockers.mjs`: the event-driven `auto-unblock` workflow (fires when a blocker closes) and the loop's idle blocker-sweep (`.sandcastle/triage.ts`). When every listed blocker is closed, the issue is auto-relabeled `blocked` → `{{READY_LABEL}}`.
+
+- A prose `Blocked by #N` line is only a **fragile fallback** — a reword, a stray "blocked by" line, or a line that drifts inside a fenced code block silently breaks parsing. **Always include the HTML marker.**
+- A `blocked` issue with **no parseable marker is skipped forever** by both paths (it just logs a warning). This is the #1 cause of a chain stalling.
+- To serialize a chain (so dependents don't collide on shared files / sequential migrations), label only the head `{{READY_LABEL}}`; give each later issue a marker pointing at its immediate predecessor.
 
 ## Retrofitting an existing issue
 
@@ -72,3 +88,4 @@ Make an existing issue agent-ready without recreating it — keep its number, hi
 - [ ] Tests specified to be non-vacuous (would fail under a plausible wrong implementation).
 - [ ] Placement specified.
 - [ ] No unresolved questions (else `{{NEEDS_FEEDBACK_LABEL}}`).
+- [ ] If it depends on unmerged work: labeled `blocked` (not `{{READY_LABEL}}`) AND has a `<!-- blocker-deps: #N -->` marker — never prose alone.

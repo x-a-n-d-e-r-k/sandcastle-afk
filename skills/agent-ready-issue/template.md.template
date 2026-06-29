@@ -1,3 +1,8 @@
+<!-- blocker-deps: #123, #456 -->
+<!-- ^ ONLY if this issue is `blocked` by other issues. Keep it near the top. The auto-unblock
+     workflow + loop blocker-sweep parse this marker and flip blocked → ready once all listed
+     blockers close. If this issue has no blockers, DELETE this line and use the ready label. -->
+
 ## Summary
 
 <what and why, 1–3 sentences>
