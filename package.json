@@ -14,7 +14,7 @@
     "afk:claims": "tsx .sandcastle/claims.ts",
     "afk:stop": "tsx .sandcastle/stop.ts",
     "afk:sentinel": "tsx .sandcastle/sentinel.ts",
-    "test": "node --import tsx --test .sandcastle/*.test.ts && bash .sandcastle/forge-issue-view.contract.test.sh",
+    "test": "node --import tsx --test .sandcastle/*.test.ts && for t in .sandcastle/*.contract.test.sh; do bash \"$t\" || exit 1; done",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

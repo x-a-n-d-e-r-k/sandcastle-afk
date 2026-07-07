@@ -73,6 +73,28 @@ gl_ctx() {
   echo "$pid $iid $pip"
 }
 
+# --- transient-error retry --------------------------------------------------
+# GitHub/GitLab intermittently return transient infra errors (5xx gateway,
+# service-unavailable, timeouts, secondary rate limits). Retry READ verbs with
+# exponential backoff so a momentary blip doesn't fail the caller (e.g. burn an
+# AFK loop cycle). MUTATING verbs are NOT retried — a retry after a partial write
+# could double-apply (duplicate comment/label/merge). Tunable via FORGE_MAX_RETRIES
+# and FORGE_RETRY_BASE_SECONDS (base 0 => instant backoff, used by the tests).
+FORGE_MAX_RETRIES="${FORGE_MAX_RETRIES:-4}"
+FORGE_RETRY_BASE_SECONDS="${FORGE_RETRY_BASE_SECONDS:-2}"
+TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|internal server error|temporarily unavailable|handshake timeout|i/o timeout|client\.timeout|timed out|timeout|connection reset|connection refused|\beof\b|secondary rate limit|abuse detection|try again'
+
+is_retryable_verb() {
+  case "$1" in
+    issue-list|issue-view|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-conflict-retry-count|pr-feedback) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The verb dispatch. run_with_retry runs it in a `( set -e; dispatch )` subshell
+# so its fail-fast (set -e + pipefail) semantics are preserved while the caller
+# captures the exit code and stderr to decide whether to retry.
+dispatch() {
 case "$verb" in
   # ---------- issues ----------
   issue-list)
@@ -356,3 +378,25 @@ case "$verb" in
 
   *) die "unknown verb '$verb'. See bin/forge for the verb list." ;;
 esac
+}
+
+# Run the verb; on a transient error from a READ verb, retry with exponential
+# backoff. stdout is buffered so a failed attempt never emits partial output.
+run_with_retry() {
+  local out err rc attempt=0 delay
+  out="$(mktemp)"; err="$(mktemp)"
+  while :; do
+    set +e; ( set -e; dispatch ) >"$out" 2>"$err"; rc=$?; set -e
+    if [[ "$rc" -eq 0 ]]; then cat "$out"; rm -f "$out" "$err"; return 0; fi
+    if is_retryable_verb "$verb" && [[ "$attempt" -lt "$FORGE_MAX_RETRIES" ]] && grep -qiE "$TRANSIENT_RE" "$err"; then
+      attempt=$((attempt + 1))
+      delay=$(( FORGE_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) ))
+      { echo "forge: transient error on '$verb' (attempt ${attempt}/${FORGE_MAX_RETRIES}); retrying in ${delay}s"; cat "$err"; } >&2
+      sleep "$delay"
+      continue
+    fi
+    cat "$err" >&2; rm -f "$out" "$err"; return "$rc"
+  done
+}
+
+run_with_retry
