@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-hero/sandcastle": "^0.10.0"
+    "@ai-hero/sandcastle": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
