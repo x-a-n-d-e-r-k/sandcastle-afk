@@ -86,7 +86,7 @@ TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|inte
 
 is_retryable_verb() {
   case "$1" in
-    issue-list|issue-view|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-conflict-retry-count|pr-feedback) return 0 ;;
+    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-conflict-retry-count|pr-feedback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -155,6 +155,18 @@ case "$verb" in
     else
       [[ -n "$comment" ]] && glab issue note "$NUM" -m "$comment" || true
       glab issue close "$NUM"
+    fi ;;
+
+  issue-comment)  # post a comment on an issue (used by the triage sweep's audit marker)
+    [[ -n "$NUM" ]] || die "issue-comment needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh issue comment "$NUM" --body "$body"; else glab issue note "$NUM" -m "$body"; fi ;;
+
+  issue-comments)  # emit an issue's comment bodies (the triage sweep greps these for its marker)
+    [[ -n "$NUM" ]] || die "issue-comments needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh issue view "$NUM" --json comments | jq -r '.comments[]?.body // empty'
+    else
+      glab issue note list "$NUM" -F json 2>/dev/null | jq -r '.[].notes[]?.body // empty' 2>/dev/null || true
     fi ;;
 
   # ---------- pull / merge requests ----------
