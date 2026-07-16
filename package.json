@@ -8,6 +8,7 @@
     "afk:init": "tsx scripts/init.ts",
     "afk:update": "tsx scripts/update.ts",
     "afk:rules": "tsx scripts/resolve-rules.ts",
+    "afk:gen-client": "tsx .sandcastle/gen-forge-client.ts",
     "afk": "tsx .sandcastle/main.ts",
     "afk:review": "tsx .sandcastle/review.ts",
     "afk:loop": "tsx .sandcastle/loop.ts",

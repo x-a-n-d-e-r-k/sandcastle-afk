@@ -83,7 +83,8 @@ done < "$VERBS_FILE"
 
 # --- 4) schema well-formedness ------------------------------------------------
 # Each descriptor: mutating/retryable bool, output in the enum, requiredArgs array,
-# and output=="json" IFF jsonFields is a non-empty array.
+# output=="json" IFF jsonFields is a non-empty array, and `array` (optional) is a boolean that
+# only a json verb may carry (it marks list-returning verbs so the typed client, #40, emits T[]).
 bad="$(jq -r '
   to_entries[]
   | .key as $v | .value as $d
@@ -94,7 +95,9 @@ bad="$(jq -r '
       if $d.output == "json" and (($d.jsonFields|type) != "array" or ($d.jsonFields|length) == 0)
         then "\($v): output=json requires a non-empty jsonFields" else empty end,
       if $d.output != "json" and ($d|has("jsonFields"))
-        then "\($v): jsonFields present but output is not json" else empty end
+        then "\($v): jsonFields present but output is not json" else empty end,
+      if ($d|has("array")) and ($d.array|type) != "boolean" then "\($v): array not boolean" else empty end,
+      if ($d|has("array")) and $d.output != "json" then "\($v): array present but output is not json" else empty end
     ] | .[]
 ' "$REG")"
 [[ -z "$bad" ]] || fail "schema violations:"$'\n'"$bad"
