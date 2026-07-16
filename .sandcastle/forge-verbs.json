@@ -1,5 +1,5 @@
 {
-  "issue-list":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "jsonFields": ["number", "title", "labels"] },
+  "issue-list":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "array": true,                         "jsonFields": ["number", "title", "labels"] },
   "issue-view":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["number", "title", "body", "labels", "state"] },
   "issue-create":             { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--title", "--body-file"] },
   "issue-edit":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
@@ -8,7 +8,7 @@
   "issue-comments":           { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
 
   "pr-create":                { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--base", "--title"] },
-  "pr-list":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "jsonFields": ["number", "headRef", "merged", "reviewState", "labels"] },
+  "pr-list":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "array": true,                         "jsonFields": ["number", "headRef", "merged", "reviewState", "labels"] },
   "pr-view":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["number", "title", "body", "headRef", "baseRef"] },
   "pr-diff":                  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
   "pr-approve":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },

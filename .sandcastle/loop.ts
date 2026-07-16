@@ -1,7 +1,8 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential } from "./config.js";
+import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential } from "./config.js";
+import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
@@ -120,7 +121,7 @@ export const triageOpts = (): RunOptions => {
   };
 };
 
-const getAgentPRs = (): PR[] => forgeJSON<PR[]>("pr-list").filter((p) => p.headRef.startsWith("agent/issue-"));
+const getAgentPRs = (): PR[] => forge.prList().filter((p) => p.headRef.startsWith("agent/issue-"));
 const syncBranch = (b: string) => { ensureHostOnDefaultBranch(); sh(`git fetch origin ${b}`); pruneWorktrees(); sh(`git branch -f ${b} origin/${b}`); };
 
 // A leftover `agent/issue-N` branch (from a failed/incomplete dispatch) gets REUSED by
@@ -134,23 +135,23 @@ function deleteStaleBranch(issue: number) {
 }
 
 function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
-  forge(`pr-label ${pr} --add-label ${L.needsHuman}`);
-  forge(`pr-comment ${pr} --body ${JSON.stringify(`AFK: ${reason}. Parking for a human.`)}`);
+  forge.prLabel(pr, "--add-label", L.needsHuman);
+  forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
 }
 
 // Deterministic blocker-sweep backstop, bound to forge. Runs synchronously between
 // loop runs (concurrency=1) so it never races a live container. issue-list omits body,
 // so we issue-view each blocked issue (and each blocker) for body + closed-state.
 function runTriageSweep() {
-  const blockedNums = forgeJSON<Issue[]>(`issue-list --label blocked`).map((i) => i.number);
+  const blockedNums = forge.issueList("--label", "blocked").map((i) => i.number);
   type Detail = { number: number; body?: string; labels: string[]; state: string };
-  const detail = (n: number) => forgeJSON<Detail>(`issue-view ${n}`);
+  const detail = (n: number): Detail => forge.issueView(n);
   const promoted = sweepBlockedIssues({
     listBlocked: () => blockedNums.map(detail),
     isClosed: (n) => isIssueClosed(detail(n)),
-    promote: (n) => { forge(`issue-edit ${n} --add-label ${L.ready} --remove-label blocked`); },
-    hasMarkerComment: (n) => forge(`issue-comments ${n}`).includes(TRIAGE_MARKER),
-    comment: (n, body) => { forge(`issue-comment ${n} --body ${JSON.stringify(body)}`); },
+    promote: (n) => { forge.issueEdit(n, "--add-label", L.ready, "--remove-label", "blocked"); },
+    hasMarkerComment: (n) => forge.issueComments(n).includes(TRIAGE_MARKER),
+    comment: (n, body) => { forge.issueComment(n, "--body", JSON.stringify(body)); },
   });
   if (promoted.length) log(`triage: promoted ${promoted.length} unblocked issue(s): ${promoted.join(", ")}`);
 }
@@ -195,7 +196,7 @@ async function main(): Promise<void> {
       // `ready` is stripped once a PR opens. Single-loop (MINE === "") leaves it null so
       // isMine is always true and the loop owns every PR (unchanged behavior).
       const ownedIssues = MINE
-        ? new Set(forgeJSON<Issue[]>(`issue-list --label ${MINE}`).map((i) => i.number))
+        ? new Set(forge.issueList("--label", MINE).map((i) => i.number))
         : null;
       const isMine = (headRef: string) => {
         if (!ownedIssues) return true;
@@ -220,14 +221,14 @@ async function main(): Promise<void> {
         // like heal so a conflict the agent can't resolve escalates to a human instead
         // of wedging the loop (the failure mode that needs manual rescue otherwise). A
         // conflicted PR can't be reviewed or merged, so skip the rest of this cycle.
-        if (forge(`pr-has-conflicts ${pr.number}`) === "true") {
-          const tries = Number(forge(`pr-conflict-retry-count ${pr.number}`)) || 0;
+        if (forge.prHasConflicts(pr.number) === "true") {
+          const tries = Number(forge.prConflictRetryCount(pr.number)) || 0;
           if (tries >= MAX_HEAL) {
             log(`PR #${pr.number} conflict-resolve cap (${tries}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
             escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} attempts`);
           } else {
             log(`PR #${pr.number} conflicts with ${cfg.defaultBranch} -> resolve ${tries + 1}/${MAX_HEAL}`);
-            forge(`pr-conflict-retry-mark ${pr.number}`);
+            forge.prConflictRetryMark(pr.number);
             syncBranch(branch);
             await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
             syncBranch(branch);
@@ -255,26 +256,26 @@ async function main(): Promise<void> {
               await sleepUnlessStopped(POLL_MS, stopNow);
               continue;
             }
-            const pl = forgeJSON<{ status: string }>(`pr-pipeline ${pr.number}`);
+            const pl = forge.prPipeline(pr.number);
             if (["success", "skipped", "none"].includes(pl.status)) {
               log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
-              forge(`pr-merge ${pr.number} --squash --delete-branch --no-auto-merge`);
+              forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge");
               log(`merged #${pr.number}`);
             } else if (["running", "pending"].includes(pl.status)) {
               log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
               await sleepUnlessStopped(POLL_MS, stopNow);
             } else {
               // failed | canceled — retry flakes, else heal against the pipeline logs
-              const tries = Number(forge(`pr-pipeline-retry-count ${pr.number}`)) || 0;
-              const failedJobs = forge(`pr-pipeline-failed-jobs ${pr.number}`).split("\n").map((s) => s.trim()).filter(Boolean);
+              const tries = Number(forge.prPipelineRetryCount(pr.number)) || 0;
+              const failedJobs = forge.prPipelineFailedJobs(pr.number).split("\n").map((s) => s.trim()).filter(Boolean);
               const onlyFlaky = cfg.flakyJobs.length ? failedJobs.every((j) => cfg.flakyJobs.includes(j)) : true;
               if (onlyFlaky && tries < cfg.maxPipelineRetry) {
                 log(`PR #${pr.number} pipeline ${pl.status} — flake retry ${tries + 1}/${cfg.maxPipelineRetry} [${failedJobs.join(", ") || "?"}]`);
-                forge(`pr-pipeline-retry-mark ${pr.number}`);
-                forge(`pr-pipeline-retry ${pr.number}`);
+                forge.prPipelineRetryMark(pr.number);
+                forge.prPipelineRetry(pr.number);
                 await sleepUnlessStopped(POLL_MS, stopNow);
               } else {
-                const heals = Number(forge(`pr-changes-count ${pr.number}`)) || 0;
+                const heals = Number(forge.prChangesCount(pr.number)) || 0;
                 if (heals >= MAX_HEAL) {
                   log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating`);
                   escalate(pr.number);
@@ -282,7 +283,7 @@ async function main(): Promise<void> {
                   log(`PR #${pr.number} pipeline failing after retries -> heal ${heals + 1}/${MAX_HEAL}`);
                   syncBranch(branch);
                   await runGuarded(healOpts(pr.number, branch, issue));
-                  forge(`pr-clear-changes ${pr.number}`);
+                  forge.prClearChanges(pr.number);
                   syncBranch(branch);
                   log(`re-reviewing #${pr.number}`);
                   await runGuarded(reviewOpts(pr.number, branch, issue));
@@ -291,7 +292,7 @@ async function main(): Promise<void> {
             }
           }
         } else if (pr.reviewState === "CHANGES_REQUESTED") {
-          const heals = Number(forge(`pr-changes-count ${pr.number}`)) || 0;
+          const heals = Number(forge.prChangesCount(pr.number)) || 0;
           if (heals >= MAX_HEAL) {
             log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
             escalate(pr.number);
@@ -299,7 +300,7 @@ async function main(): Promise<void> {
             log(`PR #${pr.number} CHANGES_REQUESTED -> heal ${heals + 1}/${MAX_HEAL}`);
             syncBranch(branch);
             await runGuarded(healOpts(pr.number, branch, issue));
-            forge(`pr-clear-changes ${pr.number}`);
+            forge.prClearChanges(pr.number);
             syncBranch(branch);
             if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
             else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
