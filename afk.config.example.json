@@ -35,5 +35,25 @@
   "agentRules": [],
   "pollMinutes": 5,
   "idleTimeoutSeconds": 900,
-  "triageIntervalMinutes": 120
+  "triageIntervalMinutes": 120,
+
+  "//ui": [
+    "OPTIONAL (#19). Omit this key entirely and nothing changes — non-UI repos are unaffected.",
+    "When present, a PR whose diff matches verifyGlobs MUST publish screenshots or the loop",
+    "refuses to merge it. The layer never renders: renderCmd is YOUR command and your",
+    "dockerBaseImage must contain whatever it needs (e.g. a browser). The agent pushes images",
+    "to artifactBranch (an orphan branch, never merged) under pr-<n>/.",
+    "  verifyGlobs    globs that mark a PR UI-touching",
+    "  renderCmd      writes images into artifactDir; capture desktop + narrow, dark + light",
+    "  artifactDir    where renderCmd writes (gitignore it)",
+    "  artifactBranch optional, default afk/artifacts",
+    "  canonDir       optional canonical mockups to compare against"
+  ],
+  "ui": {
+    "verifyGlobs": ["apps/web/**/*.{tsx,css}", "**/tokens.css"],
+    "renderCmd": "pnpm afk:render",
+    "artifactDir": ".afk/screenshots",
+    "artifactBranch": "afk/artifacts",
+    "canonDir": ""
+  }
 }

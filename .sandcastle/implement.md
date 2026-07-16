@@ -23,6 +23,8 @@ You are an autonomous coding agent. Implement the single issue above, end to end
    `forge pr-create --base {{BASE_BRANCH}} --title "<concise conventional title>" --body "Closes #{{ISSUE_NUMBER}}"`
 9. When the PR is open, output `<promise>COMPLETE</promise>` and stop.
 
+{{UI_VERIFICATION}}
+
 ## Rules
 
 - Implement only this one issue. Keep the change minimal and focused; do not touch unrelated files.

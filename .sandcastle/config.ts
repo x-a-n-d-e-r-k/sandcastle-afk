@@ -35,6 +35,17 @@ if (!existsSync(CONFIG_PATH)) {
   throw new Error("afk.config.json not found at repo root — run `pnpm afk:init` first.");
 }
 
+// Optional visual-verification config (#19). Absent => the step never fires and non-UI
+// consumers are entirely unaffected. Defined here rather than imported from ui.ts to keep
+// ui.ts's import of cfg one-directional.
+export type UiVerifyCfg = {
+  verifyGlobs: string[];
+  renderCmd: string;
+  artifactDir: string;
+  artifactBranch?: string;
+  canonDir?: string;
+};
+
 export type Cfg = {
   platform: "github" | "gitlab";
   reviewMode: "internal" | "external";
@@ -63,6 +74,8 @@ export type Cfg = {
   pollMinutes: number;
   idleTimeoutSeconds: number;
   triageIntervalMinutes: number;
+  /** Visual verification for UI-touching PRs (#19). Omit to disable entirely. */
+  ui?: UiVerifyCfg;
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));

@@ -5,6 +5,7 @@ import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, 
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
+import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 
 const RULES = loadAgentRules();
 
@@ -72,11 +73,20 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
 
 const implementOpts = (issue: number): RunOptions => ({
   ...baseRun(`issue-${issue}`, `agent/issue-${issue}`, ".sandcastle/implement.md", cfg.models.implement, true),
-  promptArgs: { ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES },
+  // Not diff-conditional: at implement time the agent hasn't written the code yet, so there is
+  // no diff to match. Injected whenever `ui` is configured; the host gate (uiGate) does the
+  // conditional enforcement once a diff exists. Empty string when `ui` is unset.
+  promptArgs: {
+    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES,
+    UI_VERIFICATION: implementUiBlock(cfg.ui),
+  },
 });
 const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`review-${pr}`, branch, ".sandcastle/review.md", cfg.models.review, false),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
+  promptArgs: {
+    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES,
+    UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui),
+  },
 });
 const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
@@ -215,9 +225,21 @@ async function main(): Promise<void> {
         } else if (pr.reviewState === "APPROVED") {
           if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleepUnlessStopped(POLL_MS, stopNow); }
           else {
+            // Visual gate (#19). An approval + green pipeline does NOT prove a UI change
+            // renders; both agents can honestly believe a broken layout is fine. If the diff
+            // touches ui.verifyGlobs and no screenshots were published, refuse to merge and
+            // hand it to a human — the prompts ask for the render, this is what enforces it.
+            // No-op for consumers without `ui` configured, and for non-UI diffs.
+            const vg = uiGate(pr.number, branch, cfg.ui);
+            if (vg.required && vg.blocked) {
+              log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);
+              escalate(pr.number, vg.reason);
+              await sleepUnlessStopped(POLL_MS, stopNow);
+              continue;
+            }
             const pl = forgeJSON<{ status: string }>(`pr-pipeline ${pr.number}`);
             if (["success", "skipped", "none"].includes(pl.status)) {
-              log(`PR #${pr.number} APPROVED, pipeline ${pl.status} -> merging`);
+              log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
               forge(`pr-merge ${pr.number} --squash --delete-branch --no-auto-merge`);
               log(`merged #${pr.number}`);
             } else if (["running", "pending"].includes(pl.status)) {
