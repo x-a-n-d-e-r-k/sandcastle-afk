@@ -1,10 +1,13 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forgeJSON, sh, log, loadAgentRules } from "./config.js";
+import { cfg, forgeJSON, sh, log, loadAgentRules, reviewAgentEnv, checkReviewCredential } from "./config.js";
 
 // Review one PR/MR:  pnpm afk:review <number>
 const PR = process.argv[2];
 if (!PR) { console.error("usage: pnpm afk:review <pr-number>"); process.exit(1); }
+
+// Same startup guard as the loop: the reviewer credential must be host-only and present (#32).
+checkReviewCredential();
 
 const pr = forgeJSON<{ number: number; headRef: string; body: string }>(`pr-view ${PR}`);
 const branch = pr.headRef;
@@ -25,7 +28,7 @@ sh(`git branch -f ${branch} origin/${branch}`);
 const r = await run({
   name: `review-${PR}`,
   sandbox: docker({ imageName: cfg.imageName }),
-  agent: claudeCode(cfg.models.review),
+  agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptFile: ".sandcastle/review.md",
   promptArgs: { PR_NUMBER: PR, ISSUE_NUMBER: issue, AGENT_RULES: loadAgentRules() },
   branchStrategy: { type: "branch", branch, baseBranch: `origin/${cfg.defaultBranch}` },

@@ -38,9 +38,9 @@ Common fixes you may hit (we did): package-manager version pinning (corepack pre
 
 The reviewer must be a **different account** than the implementer so its approval counts (neither platform lets an author approve their own request).
 
-**GitHub:** create two bot accounts, add both as **write collaborators**. Make fine-grained PATs (Contents RW, Pull requests RW, Issues RW, Metadata R). In `.sandcastle/.env`: `GH_TOKEN` = implementer, `FORGE_REVIEW_TOKEN` = reviewer. `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+**GitHub:** create two bot accounts, add both as **write collaborators**. Make fine-grained PATs (Contents RW, Pull requests RW, Issues RW, Metadata R). `GH_TOKEN` (implementer) and `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) go in `.sandcastle/.env`. The reviewer token goes in `.sandcastle/.env.review` (host-only): `FORGE_REVIEW_TOKEN` = reviewer. **It must NOT go in `.sandcastle/.env`** — that file is injected into every agent sandbox, so a reviewer token there would let the implementer approve its own PR; the loop refuses to start if it finds one there.
 
-**GitLab:** create two **project access tokens** (or bot users) with `api` + `write_repository`, roles Developer/Maintainer. In `.sandcastle/.env`: `GITLAB_TOKEN` = implementer, `FORGE_REVIEW_TOKEN` = reviewer.
+**GitLab:** create two **project access tokens** (or bot users) with `api` + `write_repository`, roles Developer/Maintainer. `GITLAB_TOKEN` (implementer) goes in `.sandcastle/.env`; `FORGE_REVIEW_TOKEN` (reviewer) goes in `.sandcastle/.env.review` (host-only, for the same reason as GitHub above — never in `.env`).
 
 ## 5. Protection / approval rules (the merge gate)
 
