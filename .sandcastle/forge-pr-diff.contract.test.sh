@@ -68,9 +68,39 @@ if FAKE_GH_DIFF_ERR="HTTP 404: Not Found" run_forge pr-diff 894 >/dev/null 2>&1;
 fi
 
 # --- 6) a transient 5xx keeps retrying (pr-diff stays a retryable read) ------
-if FAKE_GH_DIFF_ERR="HTTP 502: Bad Gateway" FORGE_MAX_RETRIES=1 FORGE_RETRY_BASE_SECONDS=0 \
-   run_forge pr-diff 894 >/dev/null 2>&1; then
+# Assert the retry OCCURRED, not merely that the exit was non-zero: a non-zero exit happens
+# whether forge retries or gives up instantly, so exit code alone doesn't pin the property in
+# this case's name. run_with_retry only sees the transient error because the 406 fallback
+# re-emits gh's captured stderr on the non-406 path (`cat "$derr" >&2`) — one load-bearing,
+# easy-to-delete line. Counting the attempts pins both that retrying happens and that it is
+# bounded by FORGE_MAX_RETRIES.
+RETRY_ERR="$TMP/retry-err"
+if FAKE_GH_DIFF_ERR="HTTP 502: Bad Gateway" FORGE_MAX_RETRIES=2 FORGE_RETRY_BASE_SECONDS=0 \
+   run_forge pr-diff 894 >/dev/null 2>"$RETRY_ERR"; then
   fail "a transient 5xx must not be rescued by the 406 fallback"
 fi
+[[ "$(grep -c "transient error on 'pr-diff'" "$RETRY_ERR")" == 2 ]] \
+  || fail "expected exactly 2 bounded retry attempts, got: $(cat "$RETRY_ERR")"
+
+# --- 7) the fallback works in a --single-branch clone (refspec coverage) ------
+# A single-branch clone's refspec covers only main, so a bare `git fetch origin <head>` leaves
+# refs/remotes/origin/<head> absent and the three-dot diff dies on an unknown revision.
+SB="$TMP/single-branch"
+git clone -q --single-branch --branch main "$ORIGIN" "$SB"
+out="$( cd "$SB" && PATH="$TMP:$PATH" FORGE_PLATFORM=github "$FORGE" pr-diff 894 )" \
+  || fail "the 406 fallback must work in a --single-branch clone"
+grep -q 'rename from old-name.ts' <<<"$out" || fail "single-branch: expected rename detection (got: $out)"
+grep -q '^+export const a = 2;' <<<"$out" || fail "single-branch: missing the content delta (got: $out)"
+
+# --- 8) a force-pushed head still diffs (guards the non-fast-forward '+') -----
+# Without a leading '+' on the refspec, the second fetch would reject the rewritten head.
+git -C "$ORIGIN" checkout -q agent/issue-894
+printf 'export const a = 3;\n' > "$ORIGIN/touched.ts"
+git -C "$ORIGIN" add -A && git -C "$ORIGIN" commit -q --amend -m rename-sweep-amended
+git -C "$ORIGIN" checkout -q main
+out="$( cd "$SB" && PATH="$TMP:$PATH" FORGE_PLATFORM=github "$FORGE" pr-diff 894 )" \
+  || fail "the 406 fallback must survive a force-pushed head"
+grep -q '^+export const a = 3;' <<<"$out" \
+  || fail "expected the amended commit's delta after a force-push (got: $out)"
 
 echo "PASS: forge pr-diff falls back to a local rename-aware diff on a 406, fails fast otherwise"
