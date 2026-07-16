@@ -96,11 +96,14 @@ export const reviewOpts = (pr: number, branch: string, issue: string): RunOption
 });
 export const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
+  // A heal can rewrite UI, invalidating the pre-heal screenshots (they key on the old head
+  // SHA now, #35), so the healing agent must know to re-render and re-publish. Empty when the
+  // consumer has no `ui` config.
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui) },
 });
 export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui) },
 });
 
 // Idle-triage `needs-feedback` re-evaluation agent (#414). Issue-ops only: it reads each

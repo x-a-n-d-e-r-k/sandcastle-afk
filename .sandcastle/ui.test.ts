@@ -150,29 +150,30 @@ test("changedFiles uses a three-dot diff and drops blank lines", () => {
 
 // --- artifact lookup --------------------------------------------------------
 
-test("artifactsFor lists files under the PR prefix", () => {
+test("artifactsFor scopes ls-tree to pr-<n>/<sha>/ (#35)", () => {
   const cmds: string[] = [];
-  const out = artifactsFor(42, DEFAULT_ARTIFACT_BRANCH, (c) => {
+  const out = artifactsFor(42, "abc123", DEFAULT_ARTIFACT_BRANCH, (c) => {
     cmds.push(c);
-    return c.startsWith("git ls-tree") ? "pr-42/desktop-light.png\npr-42/mobile-dark.png\n" : "";
+    return c.startsWith("git ls-tree") ? "pr-42/abc123/desktop-light.png\npr-42/abc123/mobile-dark.png\n" : "";
   });
-  assert.deepEqual(out, ["pr-42/desktop-light.png", "pr-42/mobile-dark.png"]);
+  assert.deepEqual(out, ["pr-42/abc123/desktop-light.png", "pr-42/abc123/mobile-dark.png"]);
   assert.ok(cmds[0].includes("+refs/heads/afk/artifacts:refs/remotes/origin/afk/artifacts"),
     "must fetch an explicit refspec so the tracking ref exists (#26)");
-  assert.ok(cmds[1].includes('-- "pr-42/"'), "must scope ls-tree to this PR's prefix");
+  assert.ok(cmds[1].includes('-- "pr-42/abc123/"'), "must scope ls-tree to this PR's HEAD-SHA prefix");
+  assert.ok(!cmds[1].includes('-- "pr-42/def999/"'), "must not scope to a different SHA's dir");
 });
 
 test("artifactsFor returns [] when the artifact branch does not exist", () => {
-  const out = artifactsFor(42, DEFAULT_ARTIFACT_BRANCH, (c) => {
+  const out = artifactsFor(42, "abc123", DEFAULT_ARTIFACT_BRANCH, (c) => {
     if (c.startsWith("git fetch")) throw new Error("couldn't find remote ref");
     return "should-not-get-here";
   });
   assert.deepEqual(out, []);
 });
 
-test("artifactsFor does not leak another PR's artifacts", () => {
-  // ls-tree is prefix-scoped, but guard the wiring: an empty result must stay empty.
-  assert.deepEqual(artifactsFor(7, DEFAULT_ARTIFACT_BRANCH, () => ""), []);
+test("artifactsFor does not leak another PR's or another SHA's artifacts", () => {
+  // ls-tree is prefix-scoped to pr-<n>/<sha>/; guard the wiring: an empty result stays empty.
+  assert.deepEqual(artifactsFor(7, "def456", DEFAULT_ARTIFACT_BRANCH, () => ""), []);
 });
 
 test("artifactBranch honours an override", () => {
@@ -182,10 +183,20 @@ test("artifactBranch honours an override", () => {
 
 // --- the gate (the only structural part) ------------------------------------
 
-const gate = (opts: { ui?: UiCfg; changed: string[]; artifacts: string[] }) =>
+// Inject all three git reads (diff, head SHA, artifacts) so the gate never touches real git.
+// `artifacts` receives (pr, sha, branch); the default helper models a store keyed by SHA so a
+// stale-SHA case can be expressed by publishing under a different sha than `head`.
+const gate = (opts: {
+  ui?: UiCfg;
+  changed: string[];
+  head?: string;
+  artifacts: string[] | ((pr: number, sha: string) => string[]);
+}) =>
   uiGate(42, "agent/issue-1", opts.ui, {
     changed: () => opts.changed,
-    artifacts: () => opts.artifacts,
+    headSha: () => opts.head ?? "head000",
+    artifacts: (pr, sha) =>
+      typeof opts.artifacts === "function" ? opts.artifacts(pr, sha) : opts.artifacts,
   });
 
 test("gate: not required when the consumer has no ui config", () => {
@@ -209,10 +220,23 @@ test("gate: BLOCKS a UI diff with no published artifacts", () => {
   assert.match(g.required && g.blocked ? g.reason : "", /published no screenshots/);
 });
 
-test("gate: PASSES a UI diff that published artifacts", () => {
-  const g = gate({ ui: UI, changed: ["apps/web/App.tsx"], artifacts: ["pr-42/desktop-light.png"] });
+test("gate: PASSES a UI diff that published artifacts for the current head", () => {
+  const g = gate({ ui: UI, changed: ["apps/web/App.tsx"], head: "def456", artifacts: ["pr-42/def456/desktop.png"] });
   assert.equal(g.required, true);
   assert.equal(g.required && g.blocked, false);
+});
+
+test("gate: BLOCKS when artifacts exist only for an earlier head — stale after a heal (#35)", () => {
+  // The bug: a heal pushed def456 but only pre-heal screenshots (abc123) were published. The
+  // gate used to pass on any artifact for the PR; it must now require the CURRENT head's.
+  const store: Record<string, string[]> = { abc123: ["pr-42/abc123/desktop.png"] };
+  const g = gate({
+    ui: UI, changed: ["apps/web/App.tsx"], head: "def456",
+    artifacts: (_pr, sha) => store[sha] ?? [],
+  });
+  assert.equal(g.required, true);
+  assert.equal(g.required && g.blocked, true);
+  assert.match(g.required && g.blocked ? g.reason : "", /current head def456|fresh one/);
 });
 
 test("gate: FAILS CLOSED when the diff can't be computed — never throws", () => {
@@ -252,6 +276,12 @@ test("implementUiBlock's publish recipe never touches the agent's own branch", (
   assert.match(b, /git clone -q --depth 1/, "must publish from a separate clone");
   assert.ok(!/git checkout -q --orphan \S+\n(?![\s\S]*mktemp)/.test(b));
   assert.ok(!b.includes("rm -rf ./*"), "must never wipe the working tree");
+});
+
+test("implementUiBlock's publish recipe keys the path by the head SHA (#35)", () => {
+  const b = implementUiBlock(UI);
+  assert.match(b, /git rev-parse HEAD/, "must derive the SHA from the actual head, not hardcode a path");
+  assert.match(b, /pr-\$PR\/\$SHA/, "must publish under pr-<n>/<sha>/, the prefix the gate checks");
 });
 
 test("implementUiBlock mentions canonDir only when configured", () => {

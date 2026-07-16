@@ -33,6 +33,8 @@ You are fixing a pull request that a reviewer **requested changes** on. You are 
 5. **Push** — `git push`.
 6. Output `<promise>COMPLETE</promise>` and stop. (A fresh review will run automatically.)
 
+{{UI_VERIFICATION}}
+
 ## Rules
 
 - Do NOT merge the PR, close the issue, or approve your own PR.
