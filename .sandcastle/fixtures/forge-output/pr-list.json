@@ -1,0 +1,4 @@
+[
+  { "number": 12, "headRefName": "feat/x", "reviewDecision": "APPROVED", "labels": [{ "name": "afk" }], "state": "OPEN" },
+  { "number": 13, "headRefName": "feat/y", "reviewDecision": "", "labels": [], "state": "OPEN" }
+]

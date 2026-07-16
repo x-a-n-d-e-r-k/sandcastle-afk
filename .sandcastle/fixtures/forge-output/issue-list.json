@@ -1,0 +1,4 @@
+[
+  { "number": 5, "title": "Do the thing", "labels": [{ "name": "agent-ready" }, { "name": "bug" }] },
+  { "number": 6, "title": "Another", "labels": [] }
+]
