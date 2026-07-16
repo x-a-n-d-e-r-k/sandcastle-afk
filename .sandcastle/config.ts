@@ -183,9 +183,12 @@ export const assertReviewCredential = (o: {
 }): void => {
   if (o.dotEnvHasToken) {
     throw new Error(
-      "FORGE_REVIEW_TOKEN must not be set in .sandcastle/.env — that file is injected into EVERY " +
-      "agent sandbox, so the implementer could approve its own PR. Move it to .sandcastle/.env.review " +
-      "(host-only; see .sandcastle/.env.review.example).",
+      "FORGE_REVIEW_TOKEN must not appear in .sandcastle/.env at all — remove the line entirely, " +
+      "even if it is blank. Upstream injects that file into EVERY agent sandbox keyed on the key's " +
+      "presence and fills a blank value from the host env, so a bare `FORGE_REVIEW_TOKEN=` line still " +
+      "leaks the real token (loaded from .env.review) into the implement/heal/resolve sandboxes — " +
+      "letting an agent approve its own PR. Put the token ONLY in .sandcastle/.env.review (host-only; " +
+      "see .sandcastle/.env.review.example).",
     );
   }
   if (o.reviewMode === "internal" && !o.hostHasToken) {
@@ -196,19 +199,21 @@ export const assertReviewCredential = (o: {
   }
 };
 
-// True iff .sandcastle/.env assigns FORGE_REVIEW_TOKEN a non-empty value. A bare
-// `FORGE_REVIEW_TOKEN=` (e.g. a stale example line) carries no secret and is ignored — only a
-// real value is the leak we refuse.
-export const envFileAssignsToken = (path: string = ENV_FILE): boolean => {
+// True iff .sandcastle/.env DECLARES FORGE_REVIEW_TOKEN — bare or valued. It must key on
+// presence, NOT on a non-empty value: upstream's resolveEnv injects `sandcastleEnv[key] ||
+// process.env[key]`, so a blank `FORGE_REVIEW_TOKEN=` line (which parseEnvFile records as the
+// key with value "") pulls the real token from the host env — and this module loads .env.review
+// into that host env. So a bare line leaks exactly as a valued one does. Detection mirrors
+// upstream's parseEnvFile (skip blank/`#`; key = text before the first `=`, trimmed) so the set
+// of lines we refuse equals the set upstream would inject as FORGE_REVIEW_TOKEN.
+export const envFileDeclaresToken = (path: string = ENV_FILE): boolean => {
   if (!existsSync(path)) return false;
   for (const raw of readFileSync(path, "utf8").split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
-    const m = line.match(/^(?:export\s+)?FORGE_REVIEW_TOKEN\s*=\s*(.*)$/);
-    if (m) {
-      const v = m[1].trim().replace(/^["']|["']$/g, "").trim();
-      if (v) return true;
-    }
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    if (line.slice(0, eq).trim() === "FORGE_REVIEW_TOKEN") return true;
   }
   return false;
 };
@@ -220,7 +225,7 @@ export const checkReviewCredential = (): void =>
   assertReviewCredential({
     reviewMode: cfg.reviewMode,
     hostHasToken: !!process.env.FORGE_REVIEW_TOKEN,
-    dotEnvHasToken: envFileAssignsToken(),
+    dotEnvHasToken: envFileDeclaresToken(),
   });
 
 // All forge calls go through here. `tokenEnv` lets a single call use a

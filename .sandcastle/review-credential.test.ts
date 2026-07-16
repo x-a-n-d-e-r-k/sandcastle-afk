@@ -19,7 +19,7 @@ if (!existsSync(CFG)) copyFileSync(join(ROOT, "afk.config.example.json"), CFG);
 process.env.FORGE_REVIEW_TOKEN = "review-token-xyz";
 
 const { reviewOpts, implementOpts, healOpts, resolveConflictsOpts, triageOpts } = await import("./loop.js");
-const { assertReviewCredential, reviewAgentEnv, envFileAssignsToken } = await import("./config.js");
+const { assertReviewCredential, reviewAgentEnv, envFileDeclaresToken } = await import("./config.js");
 
 // The agent provider from claudeCode(model, {env}) exposes `env` as a readable field.
 const agentEnv = (opts: { agent: unknown }): Record<string, string> =>
@@ -72,10 +72,10 @@ test("guard: external mode + no token → does NOT throw", () => {
     assertReviewCredential({ reviewMode: "external", hostHasToken: false, dotEnvHasToken: false }));
 });
 
-test("guard: token present in .env → throws (leaks into every sandbox), even if host has it too", () => {
+test("guard: token declared in .env → throws (leaks into every sandbox), even if host has it too", () => {
   assert.throws(
     () => assertReviewCredential({ reviewMode: "internal", hostHasToken: true, dotEnvHasToken: true }),
-    /must not be set in \.sandcastle\/\.env/,
+    /must not appear in \.sandcastle\/\.env/,
   );
 });
 
@@ -86,23 +86,31 @@ test("guard: internal mode + token in host env (correct setup) → does NOT thro
 
 // --- .env token detection: a real value is the leak; an empty assignment is not -------------
 
-test("envFileAssignsToken: true only for a non-empty value, ignoring comments/blanks", () => {
+test("envFileDeclaresToken: true for ANY declaration — bare or valued (not just non-empty)", () => {
+  // The regression this PR must not ship: upstream keys sandbox injection on the KEY's presence
+  // and fills a blank value from the host env, and this module loads .env.review into that host
+  // env. So a bare `FORGE_REVIEW_TOKEN=` line leaks the real token exactly as a valued one does —
+  // it must be refused, not waved through. Detection mirrors upstream's parse (key = text before
+  // the first `=`, comments/blanks skipped).
   const dir = mkdtempSync(join(tmpdir(), "afk-env-"));
   const f = join(dir, ".env");
   try {
-    writeFileSync(f, "GH_TOKEN=abc\n# FORGE_REVIEW_TOKEN=commented\nFORGE_REVIEW_TOKEN=ghp_real\n");
-    assert.equal(envFileAssignsToken(f), true);
+    writeFileSync(f, "FORGE_REVIEW_TOKEN=ghp_real\n");
+    assert.equal(envFileDeclaresToken(f), true, "valued line must be refused");
 
-    writeFileSync(f, "FORGE_REVIEW_TOKEN=\n"); // bare, no value
-    assert.equal(envFileAssignsToken(f), false);
+    writeFileSync(f, "GH_TOKEN=abc\nFORGE_REVIEW_TOKEN=\n"); // bare — the reopened hole
+    assert.equal(envFileDeclaresToken(f), true, "a BARE line must be refused (upstream still injects it)");
 
-    writeFileSync(f, '  export FORGE_REVIEW_TOKEN = "ghp_quoted" \n'); // export + quotes + spaces
-    assert.equal(envFileAssignsToken(f), true);
+    writeFileSync(f, "  FORGE_REVIEW_TOKEN =  \n"); // whitespace around key/value
+    assert.equal(envFileDeclaresToken(f), true);
 
     writeFileSync(f, "# FORGE_REVIEW_TOKEN=ghp_only_in_a_comment\nGH_TOKEN=x\n");
-    assert.equal(envFileAssignsToken(f), false);
+    assert.equal(envFileDeclaresToken(f), false, "a commented line is not injected by upstream");
 
-    assert.equal(envFileAssignsToken(join(dir, "nope.env")), false); // missing file
+    writeFileSync(f, "GH_TOKEN=abc\nCLAUDE_CODE_OAUTH_TOKEN=x\n");
+    assert.equal(envFileDeclaresToken(f), false, "absent → not declared");
+
+    assert.equal(envFileDeclaresToken(join(dir, "nope.env")), false); // missing file
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
