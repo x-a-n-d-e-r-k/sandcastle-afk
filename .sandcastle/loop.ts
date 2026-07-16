@@ -230,6 +230,12 @@ async function main(): Promise<void> {
             // touches ui.verifyGlobs and no screenshots were published, refuse to merge and
             // hand it to a human — the prompts ask for the render, this is what enforces it.
             // No-op for consumers without `ui` configured, and for non-UI diffs.
+            //
+            // syncBranch first so origin/<head> exists before uiGate diffs against it: this is
+            // the one path that can reach APPROVED without the review path having synced (e.g.
+            // a human approves within the poll interval), and uiGate's diff would otherwise
+            // throw on a missing ref and livelock the cycle.
+            if (cfg.ui) syncBranch(branch);
             const vg = uiGate(pr.number, branch, cfg.ui);
             if (vg.required && vg.blocked) {
               log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);

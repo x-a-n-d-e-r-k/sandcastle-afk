@@ -117,9 +117,15 @@ export type UiGate =
   | { required: true; blocked: true; files: string[]; artifacts: string[]; reason: string };
 
 /**
- * The merge decision. Pure: all I/O is injected, so this is unit-testable without git.
- * `required: false` whenever the consumer has no `ui` config or the PR touches no UI files —
- * non-UI repos and non-UI PRs are entirely unaffected.
+ * The merge decision. The git reads (`changed`, `artifacts`) are injectable, so it is
+ * unit-testable without git; it still reads `cfg.defaultBranch` from module config for the
+ * diff base. `required: false` whenever the consumer has no `ui` config or the PR touches no
+ * UI files — non-UI repos and non-UI PRs are entirely unaffected.
+ *
+ * FAILS CLOSED: if the diff can't be computed (e.g. origin/<head> isn't present), it does not
+ * throw — a throw from here on the pre-merge path would livelock the loop's cycle (#18). It
+ * escalates to a human instead, which is the safe direction for a gate whose job is to stop an
+ * unverified UI change from merging.
  */
 export const uiGate = (
   pr: number,
@@ -137,7 +143,16 @@ export const uiGate = (
   const changed = deps.changed ?? ((b, h) => changedFiles(b, h));
   const arts = deps.artifacts ?? ((n, b) => artifactsFor(n, b));
 
-  const files = uiFilesTouched(changed(cfg.defaultBranch, branch), ui.verifyGlobs);
+  let changedList: string[];
+  try {
+    changedList = changed(cfg.defaultBranch, branch);
+  } catch (e) {
+    return {
+      required: true, blocked: true, files: [], artifacts: [],
+      reason: `could not compute the diff for PR #${pr} (branch ${branch}): ${(e as Error).message}. Failing closed — a human should confirm whether this touches UI and merge manually.`,
+    };
+  }
+  const files = uiFilesTouched(changedList, ui.verifyGlobs);
   if (!files.length) return { required: false };
 
   const artifacts = arts(pr, artifactBranch(ui));

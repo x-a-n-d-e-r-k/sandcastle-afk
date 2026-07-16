@@ -49,7 +49,8 @@
     "  artifactBranch optional, default afk/artifacts",
     "  canonDir       optional canonical mockups to compare against"
   ],
-  "ui": {
+  "//ui-example": {
+    "//": "INERT sample — the `//` prefix makes this NOT the `ui` key, so the gate stays OFF. To enable, copy this into your afk.config.json as `ui` (no prefix) and point renderCmd at a real script. Shipping it armed would turn the gate ON for every consumer (the test suite seeds afk.config.json from this file) against a renderCmd that doesn't exist.",
     "verifyGlobs": ["apps/web/**/*.{tsx,css}", "**/tokens.css"],
     "renderCmd": "pnpm afk:render",
     "artifactDir": ".afk/screenshots",

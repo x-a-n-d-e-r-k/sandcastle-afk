@@ -169,6 +169,22 @@ test("gate: PASSES a UI diff that published artifacts", () => {
   assert.equal(g.required && g.blocked, false);
 });
 
+test("gate: FAILS CLOSED when the diff can't be computed — never throws", () => {
+  // changedFiles uses execSync, which throws on a missing ref. On the pre-merge (APPROVED)
+  // path a throw would propagate to the cycle catch and livelock (#18). uiGate must turn that
+  // into an escalatable block, not an exception.
+  let g: ReturnType<typeof uiGate>;
+  assert.doesNotThrow(() => {
+    g = uiGate(42, "agent/issue-gone", UI, {
+      changed: () => { throw new Error("fatal: ambiguous argument 'origin/main...origin/agent/issue-gone'"); },
+      artifacts: () => [],
+    });
+  });
+  assert.equal(g!.required, true);
+  assert.equal(g!.required && g!.blocked, true);
+  assert.match(g!.required && g!.blocked ? g!.reason : "", /failing closed/i);
+});
+
 // --- injected prompt blocks -------------------------------------------------
 
 test("implementUiBlock is empty when ui is unconfigured (non-UI repos unaffected)", () => {
