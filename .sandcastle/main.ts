@@ -1,15 +1,16 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forgeJSON, sh, log, isExcluded, priorityRank, loadAgentRules } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules } from "./config.js";
+import * as forge from "./forge-client.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
 //   pnpm afk        (loops? no — use `pnpm afk:loop` for continuous)
 type Issue = { number: number; title: string; labels: string[] };
 type PR = { number: number; headRef: string; labels: string[] };
 
-const issues = forgeJSON<Issue[]>(`issue-list --label ${cfg.labels.ready}`);
+const issues = forge.issueList("--label", cfg.labels.ready);
 const openHeads = new Set(
-  forgeJSON<PR[]>("pr-list").filter((p) => p.headRef.startsWith("agent/issue-")).map((p) => p.headRef),
+  forge.prList().filter((p) => p.headRef.startsWith("agent/issue-")).map((p) => p.headRef),
 );
 const next = issues
   .filter((i) => !isExcluded(i.labels))

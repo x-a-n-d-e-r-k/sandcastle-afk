@@ -8,7 +8,8 @@
 // This lives apart from loop.ts (which imports @ai-hero/sandcastle) on purpose: the
 // claim logic stays unit-testable with no sandbox runtime and no live forge — the deps
 // `pickNextIssue` needs are injected (realPickDeps wires the live ones).
-import { forge, forgeJSON, log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING } from "./config.js";
+import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING } from "./config.js";
+import * as forge from "./forge-client.js";
 
 export type Issue = { number: number; title: string; labels: string[] };
 export type PR = { headRef: string };
@@ -45,11 +46,11 @@ export type PickDeps = {
 // Live forge-backed deps. A factory (not a constant) so importing this module never
 // shells out — forge is only invoked when the loop actually calls these.
 export const realPickDeps = (readyLabel: string, dry: boolean): PickDeps => ({
-  listReady: () => forgeJSON<Issue[]>(`issue-list --label ${readyLabel}`),
-  listClosed: () => forgeJSON<PR[]>("pr-list --state closed"),
-  view: (n) => forgeJSON<Issue>(`issue-view ${n}`),
-  addLabel: (n, label) => { forge(`issue-edit ${n} --add-label ${label}`); },
-  removeLabel: (n, label) => { forge(`issue-edit ${n} --remove-label ${label}`); },
+  listReady: () => forge.issueList("--label", readyLabel),
+  listClosed: () => forge.prList("--state", "closed"),
+  view: (n) => forge.issueView(n),
+  addLabel: (n, label) => { forge.issueEdit(n, "--add-label", label); },
+  removeLabel: (n, label) => { forge.issueEdit(n, "--remove-label", label); },
   settle: async (ms) => { await sleep(ms); },
   loopId: LOOP_ID,
   mine: MINE,
