@@ -39,25 +39,16 @@ export const artifactPrefix = (pr: number): string => `pr-${pr}/`;
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/**
- * Translate a glob to an anchored RegExp.
- *
- * Supported: `**` (crosses separators), `*` (within a segment), `?` (one non-separator char),
- * and `{a,b}` alternation. A trailing-slash `**\/` matches ZERO or more segments, so
- * `apps/web/**\/*.tsx` matches `apps/web/App.tsx` as well as `apps/web/a/b/C.tsx`.
- *
- * LIMITATION: alternatives inside `{...}` are LITERAL — `{*.ts,*.js}` will not do what you
- * want. Config globs are `*.{tsx,css}`-shaped in practice; write two globs instead of nesting
- * wildcards in a brace group.
- */
-export const globToRegExp = (glob: string): RegExp => {
+// Translate a glob fragment to a regex fragment. Recursive: each brace alternative is run
+// through the same translator, so `*`, `**`, and `?` behave inside `{...}` exactly as outside
+// (`{*.ts,*.js}` works). `*`/`?` never cross `/`; `**/` spans zero or more whole segments.
+const translateGlob = (glob: string): string => {
   let re = "";
   let i = 0;
   while (i < glob.length) {
     const c = glob[i];
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        // `**/` spans zero or more whole segments; a bare `**` spans anything.
         if (glob[i + 2] === "/") { re += "(?:[^/]*/)*"; i += 3; continue; }
         re += ".*"; i += 2; continue;
       }
@@ -67,15 +58,29 @@ export const globToRegExp = (glob: string): RegExp => {
     if (c === "{") {
       const end = glob.indexOf("}", i);
       if (end !== -1) {
-        re += `(?:${glob.slice(i + 1, end).split(",").map(escapeRe).join("|")})`;
+        // Split on top-level commas and translate each alternative. Nested braces are NOT
+        // supported (indexOf finds the first `}`, so `{a,{b,c}}` parses oddly-but-deterministically);
+        // config globs don't nest, and the behavior is pinned by a test rather than left to chance.
+        const alts = glob.slice(i + 1, end).split(",").map(translateGlob);
+        re += `(?:${alts.join("|")})`;
         i = end + 1; continue;
       }
       // Unbalanced brace: treat as a literal rather than throwing on a typo'd config.
     }
     re += escapeRe(c); i += 1;
   }
-  return new RegExp(`^${re}$`);
+  return re;
 };
+
+/**
+ * Translate a glob to an anchored RegExp.
+ *
+ * Supported: `**` (crosses separators), `*` (within a segment), `?` (one non-separator char),
+ * and `{a,b}` alternation whose alternatives may themselves contain `*`/`**`/`?`. A
+ * trailing-slash `**\/` matches ZERO or more segments, so `apps/web/**\/*.tsx` matches
+ * `apps/web/App.tsx` as well as `apps/web/a/b/C.tsx`. Nested brace groups are not supported.
+ */
+export const globToRegExp = (glob: string): RegExp => new RegExp(`^${translateGlob(glob)}$`);
 
 export const matchesAnyGlob = (file: string, globs: string[]): boolean =>
   globs.some((g) => globToRegExp(g).test(file));

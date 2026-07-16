@@ -55,6 +55,52 @@ test("globToRegExp: brace alternation", () => {
   assert.ok(!re.test("a/x.ts"));
 });
 
+test("globToRegExp: wildcards inside a brace group are honored, not literal (#34)", () => {
+  // The reported bug: `{*.tsx,*.css}` used to translate to `(?:\*\.tsx|\*\.css)` — a literal
+  // asterisk that matches no real path — so every UI PR read as non-UI and merged unverified.
+  // uiFilesTouched (used by the gate) must find the file.
+  assert.deepEqual(
+    uiFilesTouched(["apps/web/App.tsx"], ["apps/web/**/{*.tsx,*.css}"]),
+    ["apps/web/App.tsx"],
+  );
+  const re = globToRegExp("apps/web/**/{*.tsx,*.css}");
+  assert.ok(re.test("apps/web/App.tsx"));
+  assert.ok(re.test("apps/web/a/b/x.css"));
+  assert.ok(!re.test("apps/web/App.ts"), "extension outside the group must not match");
+  assert.ok(!re.test("apps/api/App.tsx"), "literal prefix must still bind");
+});
+
+test("globToRegExp: a wildcard group rejects a non-match (not an over-broad fix)", () => {
+  const re = globToRegExp("a/{*.ts,b?.js}");
+  assert.ok(re.test("a/f.ts"));
+  assert.ok(re.test("a/b1.js"));
+  assert.ok(!re.test("a/b12.js"), "? in a group matches exactly one char");
+  assert.ok(!re.test("a/f.tsx"), "must not match everything");
+});
+
+test("globToRegExp: * inside a group does not cross a separator", () => {
+  const re = globToRegExp("a/{*,x}");
+  assert.ok(re.test("a/b"));
+  assert.ok(!re.test("a/b/c"), "* in a group stays within a segment");
+});
+
+test("globToRegExp: a group at the front of the pattern", () => {
+  const re = globToRegExp("{apps,packages}/**/*.tsx");
+  assert.ok(re.test("apps/web/A.tsx"));
+  assert.ok(re.test("packages/ui/B.tsx"));
+  assert.ok(!re.test("server/A.tsx"));
+});
+
+test("globToRegExp: nested brace groups are unsupported — behavior pinned, not correct", () => {
+  // Out of scope (config globs don't nest). indexOf finds the FIRST `}`, so `{a,{b,c}}`
+  // parses as group "a,{b,c" + a trailing literal `}`. Pin the deterministic outcome so a
+  // future change to nesting is a conscious one, and assert it does NOT silently work.
+  const re = globToRegExp("{a,{b,c}}");
+  assert.ok(re.test("a}"), "documents the actual parse");
+  assert.ok(!re.test("a"), "nesting is NOT supported — 'a' is not a bare alternative");
+  assert.ok(!re.test("b"));
+});
+
 test("globToRegExp: dots are literal, not wildcards", () => {
   // A naive implementation leaks regex '.' and matches 'tokensXcss'.
   const re = globToRegExp("tokens.css");
