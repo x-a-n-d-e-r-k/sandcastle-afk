@@ -34,8 +34,14 @@ export type UiCfg = UiVerifyCfg;
 
 export const DEFAULT_ARTIFACT_BRANCH = "afk/artifacts";
 export const artifactBranch = (ui: UiCfg): string => ui.artifactBranch ?? DEFAULT_ARTIFACT_BRANCH;
-/** Artifacts for a PR live under this prefix on the orphan branch. */
-export const artifactPrefix = (pr: number): string => `pr-${pr}/`;
+/**
+ * Artifacts for a PR live under this prefix on the orphan branch, keyed by the PR's HEAD SHA
+ * (#35). Keying by PR number alone let a heal that rewrote the UI keep satisfying the gate on
+ * screenshots of the pre-heal code — a green gate with a render nobody re-did. The SHA makes
+ * freshness structural: a heal pushes a new tip, the prefix changes, stale artifacts no longer
+ * count.
+ */
+export const artifactPrefix = (pr: number, headSha: string): string => `pr-${pr}/${headSha}/`;
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -95,9 +101,14 @@ export const changedFiles = (base: string, head: string, run: (c: string) => str
   return out.split("\n").map((s) => s.trim()).filter(Boolean);
 };
 
-/** Artifact paths published for a PR, or [] if the branch or prefix is absent. */
+/** The PR branch's current tip SHA, read host-side. Injectable for testing. */
+export const headShaOf = (branch: string, run: (c: string) => string = sh): string =>
+  run(`git rev-parse origin/${branch}`).trim();
+
+/** Artifact paths published for a PR at a specific head SHA, or [] if none exist there. */
 export const artifactsFor = (
   pr: number,
+  headSha: string,
   branch: string = DEFAULT_ARTIFACT_BRANCH,
   run: (c: string) => string = sh,
 ): string[] => {
@@ -109,7 +120,8 @@ export const artifactsFor = (
     return []; // branch doesn't exist yet => nothing published
   }
   try {
-    const out = run(`git ls-tree -r --name-only origin/${branch} -- "${artifactPrefix(pr)}"`);
+    // Scoped to pr-<n>/<sha>/ — a sibling SHA's dir under the same PR does not match.
+    const out = run(`git ls-tree -r --name-only origin/${branch} -- "${artifactPrefix(pr, headSha)}"`);
     return out.split("\n").map((s) => s.trim()).filter(Boolean);
   } catch {
     return [];
@@ -141,30 +153,38 @@ export const uiGate = (
   ui: UiCfg | undefined,
   deps: {
     changed?: (base: string, head: string) => string[];
-    artifacts?: (pr: number, branch: string) => string[];
+    headSha?: (branch: string) => string;
+    artifacts?: (pr: number, headSha: string, branch: string) => string[];
   } = {},
 ): UiGate => {
   if (!ui || !ui.verifyGlobs?.length) return { required: false };
   const changed = deps.changed ?? ((b, h) => changedFiles(b, h));
-  const arts = deps.artifacts ?? ((n, b) => artifactsFor(n, b));
+  const headSha = deps.headSha ?? ((b) => headShaOf(b));
+  const arts = deps.artifacts ?? ((n, sha, b) => artifactsFor(n, sha, b));
 
+  // Diff and head SHA share the fail-closed guard: both read origin/<head>, and a throw here on
+  // the pre-merge path would livelock the cycle (#18). Escalate to a human instead.
   let changedList: string[];
+  let sha: string;
   try {
     changedList = changed(cfg.defaultBranch, branch);
+    sha = headSha(branch);
   } catch (e) {
     return {
       required: true, blocked: true, files: [], artifacts: [],
-      reason: `could not compute the diff for PR #${pr} (branch ${branch}): ${(e as Error).message}. Failing closed — a human should confirm whether this touches UI and merge manually.`,
+      reason: `could not resolve the diff/head for PR #${pr} (branch ${branch}): ${(e as Error).message}. Failing closed — a human should confirm whether this touches UI and merge manually.`,
     };
   }
   const files = uiFilesTouched(changedList, ui.verifyGlobs);
   if (!files.length) return { required: false };
 
-  const artifacts = arts(pr, artifactBranch(ui));
+  // Artifacts must exist for THIS head SHA. Screenshots published against an earlier commit
+  // (e.g. before a heal rewrote the UI) no longer count — that is the #35 fix.
+  const artifacts = arts(pr, sha, artifactBranch(ui));
   if (!artifacts.length) {
     return {
       required: true, blocked: true, files, artifacts,
-      reason: `PR #${pr} changes ${files.length} UI file(s) (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) but published no screenshots to ${artifactBranch(ui)}:${artifactPrefix(pr)}. Green checks do not prove a UI change renders.`,
+      reason: `PR #${pr} changes ${files.length} UI file(s) (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) but published no screenshots to ${artifactBranch(ui)}:${artifactPrefix(pr, sha)} for the current head ${sha.slice(0, 8)}. Green checks do not prove a UI change renders; a heal since the last render needs a fresh one.`,
     };
   }
   return { required: true, blocked: false, files, artifacts };
@@ -192,11 +212,13 @@ ${ui.verifyGlobs.map((g) => `- \`${g}\``).join("\n")}
 1. Render it: run \`${ui.renderCmd}\`, which writes images into \`${ui.artifactDir}\`.
 2. Capture desktop AND a narrow (mobile) width, in BOTH dark and light themes.
 3. **Look at the output.** Check every item in the checklist below.${canon}
-4. Open the PR first (you need its number), then publish the images to the artifact branch so
-   a human and the reviewer can see them. This uses a SEPARATE clone in a temp dir — it must
-   never touch your PR branch or working tree:
+4. Commit and push your change FIRST (open the PR if it isn't open yet), then publish the images.
+   The gate keys artifacts to your branch's HEAD commit, so publish AFTER your final commit — if
+   you heal/amend later, re-publish. This uses a SEPARATE clone in a temp dir — it must never
+   touch your PR branch or working tree:
    \`\`\`bash
    PR=<the PR number>
+   SHA=$(git rev-parse HEAD)   # your branch tip; the gate requires screenshots under this SHA
    forge git-setup
    REMOTE=$(git remote get-url origin); tmp=$(mktemp -d)
    git clone -q --depth 1 --branch ${artifactBranch(ui)} "$REMOTE" "$tmp" 2>/dev/null || {
@@ -204,9 +226,9 @@ ${ui.verifyGlobs.map((g) => `- \`${g}\``).join("\n")}
      git -C "$tmp" remote add origin "$REMOTE"
      git -C "$tmp" checkout -q --orphan ${artifactBranch(ui)}
    }
-   mkdir -p "$tmp/pr-$PR" && cp -r "${ui.artifactDir}/." "$tmp/pr-$PR/"
+   mkdir -p "$tmp/pr-$PR/$SHA" && cp -r "${ui.artifactDir}/." "$tmp/pr-$PR/$SHA/"
    git -C "$tmp" add -A
-   git -C "$tmp" -c user.email=afk@local -c user.name=afk commit -q -m "artifacts: pr-$PR"
+   git -C "$tmp" -c user.email=afk@local -c user.name=afk commit -q -m "artifacts: pr-$PR @ $SHA"
    git -C "$tmp" push -q origin HEAD:refs/heads/${artifactBranch(ui)}
    \`\`\`
 5. Comment the image links on the PR with \`forge pr-comment\` so they're visible in review.

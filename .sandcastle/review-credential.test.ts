@@ -48,6 +48,15 @@ test("triageOpts does NOT get the reviewer token", () => {
   assert.equal("FORGE_REVIEW_TOKEN" in agentEnv(triageOpts()), false);
 });
 
+test("healOpts and the conflict-resolver wire UI_VERIFICATION so a heal re-renders (#35)", () => {
+  // With the seeded example config `ui` is inert, so the injected block is "" — but the ARG
+  // must be present, which is what carries the re-render instruction once a consumer sets ui.
+  const heal = healOpts(5, "agent/issue-5", "5").promptArgs ?? {};
+  const resolve = resolveConflictsOpts(5, "agent/issue-5", "5").promptArgs ?? {};
+  assert.equal("UI_VERIFICATION" in heal, true);
+  assert.equal("UI_VERIFICATION" in resolve, true);
+});
+
 test("reviewAgentEnv is empty when the token is unset (external mode never approves)", () => {
   const saved = process.env.FORGE_REVIEW_TOKEN;
   delete process.env.FORGE_REVIEW_TOKEN;

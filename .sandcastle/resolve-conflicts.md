@@ -31,6 +31,8 @@ advanced since this branch was created and now conflicts with it.
 6. **Push** — `git push`.
 7. Output `<promise>COMPLETE</promise>` and stop. (A fresh review runs automatically.)
 
+{{UI_VERIFICATION}}
+
 ## Rules
 
 - Do NOT merge the PR, close the issue, or approve your own PR.
