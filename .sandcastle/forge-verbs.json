@@ -1,0 +1,35 @@
+{
+  "issue-list":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "jsonFields": ["number", "title", "labels"] },
+  "issue-view":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["number", "title", "body", "labels", "state"] },
+  "issue-create":             { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--title", "--body-file"] },
+  "issue-edit":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "issue-close":              { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "issue-comment":            { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "issue-comments":           { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+
+  "pr-create":                { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--base", "--title"] },
+  "pr-list":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "jsonFields": ["number", "headRef", "merged", "reviewState", "labels"] },
+  "pr-view":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["number", "title", "body", "headRef", "baseRef"] },
+  "pr-diff":                  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-approve":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-request-changes":       { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-changes-count":         { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-clear-changes":         { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-merge":                 { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-label":                 { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-comment":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-feedback":              { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+
+  "pr-pipeline":              { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["id", "status"] },
+  "pr-pipeline-retry":        { "mutating": true,  "retryable": false, "output": "text", "requiredArgs": ["number"] },
+  "pr-pipeline-failed-jobs":  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-pipeline-failures":     { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-pipeline-retry-count":  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-pipeline-retry-mark":   { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+
+  "pr-has-conflicts":         { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-conflict-retry-count":  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-conflict-retry-mark":   { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+
+  "git-setup":                { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": [] }
+}
