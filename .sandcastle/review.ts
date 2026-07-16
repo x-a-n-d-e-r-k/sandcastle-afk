@@ -8,8 +8,15 @@ if (!PR) { console.error("usage: pnpm afk:review <pr-number>"); process.exit(1);
 
 const pr = forgeJSON<{ number: number; headRef: string; body: string }>(`pr-view ${PR}`);
 const branch = pr.headRef;
-const m = (pr.body || "").match(/closes #(\d+)/i) ?? branch.match(/issue-(\d+)/);
-const issue = m ? m[1] : "";
+// The branch fallback is a genuine safety net, but it also hides the defect it rescues:
+// a PR whose body lacks a closing keyword reviews and merges green, then leaves its issue
+// open forever. Keep the fallback; make it loud. (forge pr-create now prevents this at the
+// source — the warning covers PRs opened by other means.)
+const bodyMatch = (pr.body || "").match(/(?:closes|fixes|resolves) #(\d+)/i);
+const branchMatch = branch.match(/issue-(\d+)/);
+const issue = bodyMatch?.[1] ?? branchMatch?.[1] ?? "";
+if (!bodyMatch && branchMatch)
+  console.warn(`Warning: PR #${PR} body has no closing keyword; derived issue #${issue} from branch '${branch}'. The issue will NOT auto-close on merge.`);
 if (!issue) console.warn("Warning: could not derive issue number from PR body or branch.");
 
 sh(`git fetch origin ${branch}`);
