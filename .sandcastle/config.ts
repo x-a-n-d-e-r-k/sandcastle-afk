@@ -11,9 +11,18 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // LOOP_ID. Load it here so host-side code sees those vars. `loadEnvFile` (Node ≥20.12)
 // does NOT override already-set vars, so an explicit `export LOOP_ID=` still wins.
 const ENV_FILE = join(ROOT, ".sandcastle", ".env");
+const REVIEW_ENV_FILE = join(ROOT, ".sandcastle", ".env.review");
 const loadEnvFile = (process as unknown as { loadEnvFile?: (p: string) => void }).loadEnvFile;
 if (existsSync(ENV_FILE) && typeof loadEnvFile === "function") {
   try { loadEnvFile(ENV_FILE); } catch { /* malformed .env — keep ambient env */ }
+}
+// The reviewer credential (FORGE_REVIEW_TOKEN) lives in a HOST-ONLY file, never in .env:
+// upstream's resolveEnv injects every key of .sandcastle/.env into EVERY agent sandbox, so a
+// token there would let the implementer approve its own PR (#32). .env.review is loaded here
+// (host process only) and injected into the review run alone via reviewAgentEnv(). loadEnvFile
+// does not override already-set vars, so an explicit `export FORGE_REVIEW_TOKEN=` still wins.
+if (existsSync(REVIEW_ENV_FILE) && typeof loadEnvFile === "function") {
+  try { loadEnvFile(REVIEW_ENV_FILE); } catch { /* malformed — keep ambient env */ }
 }
 
 // Per-clone loop identity for concurrent backlog claiming (#8). Unset => single-loop
@@ -149,6 +158,70 @@ export const ensureHostOnDefaultBranch = () => {
     log(`ensureHostOnDefaultBranch failed: ${(e as Error).message}`);
   }
 };
+
+// --- reviewer-credential isolation (#32) -----------------------------------
+// FORGE_REVIEW_TOKEN gates PR approval, and approval gates auto-merge. If it reaches the
+// implement/heal/resolve sandboxes, only the prompt stops an agent approving its own PR —
+// the #23 class (an invariant asked of a probabilistic agent, not enforced). So it is
+// carried in .env.review (host-only) and injected into the review run alone.
+
+// The env passed to the REVIEW agent so `forge --as-reviewer` can authenticate. Read at call
+// time from the host env (populated from .env.review above). Empty when unset — external mode
+// never calls --as-reviewer, and internal mode is guarded at startup below.
+export const reviewAgentEnv = (): Record<string, string> => {
+  const t = process.env.FORGE_REVIEW_TOKEN;
+  return t ? { FORGE_REVIEW_TOKEN: t } : {};
+};
+
+// Pure guard (no I/O) so both branches are unit-testable in one process.
+//   dotEnvHasToken → the token is in .env, where upstream leaks it into every sandbox: refuse.
+//   internal review without the token anywhere → it cannot approve: refuse, don't fail mid-cycle.
+export const assertReviewCredential = (o: {
+  reviewMode: string;
+  hostHasToken: boolean;
+  dotEnvHasToken: boolean;
+}): void => {
+  if (o.dotEnvHasToken) {
+    throw new Error(
+      "FORGE_REVIEW_TOKEN must not be set in .sandcastle/.env — that file is injected into EVERY " +
+      "agent sandbox, so the implementer could approve its own PR. Move it to .sandcastle/.env.review " +
+      "(host-only; see .sandcastle/.env.review.example).",
+    );
+  }
+  if (o.reviewMode === "internal" && !o.hostHasToken) {
+    throw new Error(
+      "internal review mode requires FORGE_REVIEW_TOKEN in .sandcastle/.env.review (host-only); " +
+      "it was not found in the environment. Set it, or use reviewMode \"external\".",
+    );
+  }
+};
+
+// True iff .sandcastle/.env assigns FORGE_REVIEW_TOKEN a non-empty value. A bare
+// `FORGE_REVIEW_TOKEN=` (e.g. a stale example line) carries no secret and is ignored — only a
+// real value is the leak we refuse.
+export const envFileAssignsToken = (path: string = ENV_FILE): boolean => {
+  if (!existsSync(path)) return false;
+  for (const raw of readFileSync(path, "utf8").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(?:export\s+)?FORGE_REVIEW_TOKEN\s*=\s*(.*)$/);
+    if (m) {
+      const v = m[1].trim().replace(/^["']|["']$/g, "").trim();
+      if (v) return true;
+    }
+  }
+  return false;
+};
+
+// Startup check for the internal-review entrypoints (loop.ts, review.ts). NOT run at import
+// time — that would throw during unrelated tests and for external-mode consumers who never
+// set the token; the entrypoints call it once.
+export const checkReviewCredential = (): void =>
+  assertReviewCredential({
+    reviewMode: cfg.reviewMode,
+    hostHasToken: !!process.env.FORGE_REVIEW_TOKEN,
+    dotEnvHasToken: envFileAssignsToken(),
+  });
 
 // All forge calls go through here. `tokenEnv` lets a single call use a
 // different identity (e.g. the reviewer): forge("pr-approve 5", { GH_TOKEN: reviewToken }).

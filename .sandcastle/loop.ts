@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch } from "./config.js";
+import { cfg, forge, forgeJSON, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential } from "./config.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
@@ -71,7 +71,9 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
   idleTimeoutSeconds: cfg.idleTimeoutSeconds,
 });
 
-const implementOpts = (issue: number): RunOptions => ({
+// Exported for the credential test (#32): assert the reviewer token is present in the review
+// run's agent env and ABSENT from every other phase — without booting Docker.
+export const implementOpts = (issue: number): RunOptions => ({
   ...baseRun(`issue-${issue}`, `agent/issue-${issue}`, ".sandcastle/implement.md", cfg.models.implement, true),
   // Not diff-conditional: at implement time the agent hasn't written the code yet, so there is
   // no diff to match. Injected whenever `ui` is configured; the host gate (uiGate) does the
@@ -81,18 +83,22 @@ const implementOpts = (issue: number): RunOptions => ({
     UI_VERIFICATION: implementUiBlock(cfg.ui),
   },
 });
-const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`review-${pr}`, branch, ".sandcastle/review.md", cfg.models.review, false),
+  // The ONLY phase that gets the reviewer credential — this is the harness enforcing the
+  // independent-review property, not the prompt (#32). reviewAgentEnv() is {} when the token
+  // is unset (external mode); internal mode is guaranteed the token by checkReviewCredential().
+  agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptArgs: {
     PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES,
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui),
   },
 });
-const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
   promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES },
 });
-const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
   promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES },
 });
@@ -147,6 +153,9 @@ function runTriageSweep() {
 }
 
 async function main(): Promise<void> {
+  // Fail fast if the reviewer credential is misplaced (in .env, where it leaks to every
+  // sandbox) or missing in internal mode — before any container starts (#32).
+  checkReviewCredential();
   let lastTriageAt: number | null = null;
   log(`AFK loop starting (concurrency 1, platform ${cfg.platform}, review ${cfg.reviewMode}${DRY ? ", DRY-RUN" : ""}). \`pnpm afk:stop\` stops after the current run; Ctrl-C stops sooner (again to force).`);
 
