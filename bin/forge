@@ -244,7 +244,14 @@ case "$verb" in
         v="$(gh pr view "$NUM" --json baseRefName,headRefName)"
         dbase="$(jq -r '.baseRefName' <<<"$v")"; dhead="$(jq -r '.headRefName' <<<"$v")"
         [[ -n "$dbase" && -n "$dhead" ]] || die "pr-diff: 406 fallback could not resolve the PR's refs"
-        git fetch -q origin "$dbase" "$dhead" \
+        # Explicit refspecs: a bare `git fetch origin <branch>` writes FETCH_HEAD and only
+        # updates refs/remotes/origin/<branch> opportunistically, when the clone's configured
+        # refspec happens to cover it. A --single-branch clone's does not, and the three-dot
+        # diff below would then die on an unknown revision. Leading '+' so a force-pushed head
+        # still updates the tracking ref instead of failing the fetch.
+        git fetch -q origin \
+          "+refs/heads/$dbase:refs/remotes/origin/$dbase" \
+          "+refs/heads/$dhead:refs/remotes/origin/$dhead" \
           || die "pr-diff: 406 fallback could not fetch origin/$dbase and origin/$dhead"
         echo "### forge: GitHub pr-diff returned 406 (>300 changed files); diffed locally with rename detection."
         echo "### Pure renames appear as rename headers without hunks — the content delta is below."
