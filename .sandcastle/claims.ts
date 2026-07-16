@@ -3,7 +3,8 @@
 // Lists every `working:*` claim, maps each claimed issue to its agent PR + review
 // state, groups by owner, and flags any issue held by more than one owner (a claim
 // race that did NOT resolve) — exiting non-zero so it can gate a check.
-import { forge, forgeJSON, WORKING } from "./config.js";
+import { WORKING } from "./config.js";
+import * as forge from "./forge-client.js";
 
 type Issue = { number: number; title: string; labels: string[] };
 type PR = { number: number; headRef: string; reviewState: string };
@@ -16,9 +17,9 @@ const issueNumOf = (headRef: string): number => Number(headRef.match(/issue-(\d+
 function main(): void {
   // We don't know the live LOOP_IDs in advance, so list all open issues and keep the
   // claimed ones (any carrying a `working:<id>` label).
-  const claimed = forgeJSON<Issue[]>("issue-list").filter((i) => ownersOf(i.labels).length > 0);
+  const claimed = forge.issueList().filter((i) => ownersOf(i.labels).length > 0);
   const prByIssue = new Map<number, PR>(
-    forgeJSON<PR[]>("pr-list")
+    forge.prList()
       .filter((p) => p.headRef.startsWith("agent/issue-"))
       .map((p) => [issueNumOf(p.headRef), p]),
   );

@@ -1,7 +1,7 @@
 {
   "issue-list":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "array": true,                         "jsonFields": ["number", "title", "labels"] },
   "issue-view":               { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["number", "title", "body", "labels", "state"] },
-  "issue-create":             { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--title", "--body-file"] },
+  "issue-create":             { "mutating": true,  "retryable": false, "output": "text", "requiredArgs": ["--title", "--body-file"] },
   "issue-edit":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "issue-close":              { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "issue-comment":            { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },

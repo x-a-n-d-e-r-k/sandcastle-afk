@@ -47,9 +47,8 @@ export const issueList = (...rest: Arg[]): IssueListItem[] =>
 export const issueView = (num: number, ...rest: Arg[]): IssueView =>
   forgeJSON<IssueView>(`issue-view ${[num, ...rest].join(" ")}`.trim());
 
-export const issueCreate = (...rest: Arg[]): void => {
+export const issueCreate = (...rest: Arg[]): string =>
   forge(`issue-create ${rest.join(" ")}`.trim());
-};
 
 export const issueEdit = (num: number, ...rest: Arg[]): void => {
   forge(`issue-edit ${[num, ...rest].join(" ")}`.trim());

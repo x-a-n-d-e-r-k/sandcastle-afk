@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { cfg, forge, forgeJSON, sh, log, ROOT } from "./config.js";
+import { cfg, sh, log, ROOT } from "./config.js";
+import * as forge from "./forge-client.js";
 
 // ---------------------------------------------------------------------------
 // e2e quality sentinel (out-of-band, scheduled — NOT part of the loop).
@@ -52,7 +53,7 @@ function runE2E(grep?: string): Failure[] {
 function existingIssue(f: Failure): boolean {
   const marker = `[e2e] ${f.title}`;
   try {
-    const hits = forgeJSON<{ title: string }[]>(`issue-list --label ${cfg.labels.e2eRegression}`);
+    const hits = forge.issueList("--label", cfg.labels.e2eRegression);
     return hits.some((i) => i.title.includes(marker));
   } catch { return false; }
 }
@@ -71,7 +72,7 @@ function fileIssue(f: Failure) {
   ].join("\n");
   const tmp = `${ROOT}/.sandcastle/.sentinel-issue.md`;
   sh(`cat > ${JSON.stringify(tmp)} <<'AFKEOF'\n${body}\nAFKEOF`);
-  const url = forge(`issue-create --title ${JSON.stringify(title)} --label ${cfg.labels.ready} --label ${cfg.labels.e2eRegression} --body-file ${JSON.stringify(tmp)}`);
+  const url = forge.issueCreate("--title", JSON.stringify(title), "--label", cfg.labels.ready, "--label", cfg.labels.e2eRegression, "--body-file", JSON.stringify(tmp));
   sh(`rm -f ${JSON.stringify(tmp)}`);
   log(`filed: ${url}`);
 }
