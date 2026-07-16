@@ -172,6 +172,22 @@ case "$verb" in
   # ---------- pull / merge requests ----------
   pr-create)
     [[ -n "$base" && -n "$title" ]] || die "pr-create needs --base and --title"
+    # A PR body is load-bearing: GitHub/GitLab read the closing keyword from it, so a
+    # bodyless PR merges without ever closing its issue (zombie issue, re-investigated
+    # by the next agent). The prompt asks for it; only forge can enforce it.
+    if [[ -n "$body_file" ]]; then
+      [[ -f "$body_file" ]] || die "pr-create: --body-file '$body_file' does not exist"
+      body="$(cat "$body_file")"
+    fi
+    [[ -n "${body//[[:space:]]/}" ]] || die "pr-create needs --body or --body-file (non-empty)"
+    if ! grep -qiE '(closes|fixes|resolves) #[0-9]+' <<<"$body"; then
+      # Self-correct off the loop's branch convention (agent/issue-<N>). Same derivation
+      # as review.ts's fallback, so both agree on which issue this PR belongs to.
+      cur="$(git branch --show-current 2>/dev/null || true)"
+      [[ "$cur" =~ issue-([0-9]+) ]] \
+        || die "pr-create: body has no closing keyword (Closes/Fixes/Resolves #<n>) and branch '$cur' has no issue number to derive one from"
+      body="Closes #${BASH_REMATCH[1]}"$'\n\n'"$body"
+    fi
     if [[ "$PLATFORM" == github ]]; then
       gh pr create --base "$base" --title "$title" --body "$body"
     else
