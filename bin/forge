@@ -232,7 +232,33 @@ case "$verb" in
 
   pr-diff)
     [[ -n "$NUM" ]] || die "pr-diff needs <number>"
-    if [[ "$PLATFORM" == github ]]; then gh pr diff "$NUM"; else glab mr diff "$NUM"; fi ;;
+    if [[ "$PLATFORM" == github ]]; then
+      # GitHub's PR-diff API hard-fails with 406 above 300 changed files, which stalls the
+      # review step forever (the loop error-sleeps and retries the same doomed call). Fall
+      # back to diffing locally. Rename detection is the point: the API counts a rename as
+      # 2 files, so a mechanical sweep blows the limit while the reviewable delta is small.
+      derr="$(mktemp)"
+      if gh pr diff "$NUM" 2>"$derr"; then rm -f "$derr"
+      elif grep -qiE 'HTTP 406|not acceptable|too (large|many)|diff is too big' "$derr"; then
+        rm -f "$derr"
+        v="$(gh pr view "$NUM" --json baseRefName,headRefName)"
+        dbase="$(jq -r '.baseRefName' <<<"$v")"; dhead="$(jq -r '.headRefName' <<<"$v")"
+        [[ -n "$dbase" && -n "$dhead" ]] || die "pr-diff: 406 fallback could not resolve the PR's refs"
+        git fetch -q origin "$dbase" "$dhead" \
+          || die "pr-diff: 406 fallback could not fetch origin/$dbase and origin/$dhead"
+        echo "### forge: GitHub pr-diff returned 406 (>300 changed files); diffed locally with rename detection."
+        echo "### Pure renames appear as rename headers without hunks — the content delta is below."
+        echo
+        # Three-dot: diff origin/$dhead against its merge-base with origin/$dbase.
+        git --no-pager diff --find-renames --stat "origin/$dbase...origin/$dhead"
+        echo
+        git --no-pager diff --find-renames "origin/$dbase...origin/$dhead"
+      else
+        # Any other failure (auth, 404, transient 5xx) must surface unchanged so the
+        # existing retry/fail-fast paths keep working.
+        cat "$derr" >&2; rm -f "$derr"; exit 1
+      fi
+    else glab mr diff "$NUM"; fi ;;
 
   pr-approve)
     [[ -n "$NUM" ]] || die "pr-approve needs <number>"
