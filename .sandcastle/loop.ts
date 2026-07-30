@@ -190,6 +190,12 @@ async function main(): Promise<void> {
       ensureHostOnDefaultBranch(); // recover if an interrupted run left the host repo on an agent branch
       pruneWorktrees(); // clear worktrees leaked by torn-down sandbox containers before any branch op
       sh(`git fetch origin ${cfg.defaultBranch}`);
+      // Blocker-sweep EVERY cycle, not only when idle (#47): promote blocked issues whose
+      // deps have all closed. It's deterministic, synchronous, forge-only (no container, no
+      // LLM) and idempotent — cheap enough to run unconditionally. It used to run only in the
+      // idle branch, but a non-empty `low` fill queue means the loop never goes idle, so a
+      // gated priority chain stayed blocked behind its own fill work and never cascaded.
+      runTriageSweep();
       const all = getAgentPRs();
       // Multi-loop (#8): only drive PRs whose issue THIS clone owns (carries our claim).
       // Query the claim label directly (not the `ready` set) so ownership survives even if
@@ -321,9 +327,9 @@ async function main(): Promise<void> {
           if (shouldRunTriage(Date.now(), lastTriageAt, cfg.triageIntervalMinutes * 60_000)) {
             lastTriageAt = Date.now();
             log("idle — running triage pass");
-            runTriageSweep();
-            // LLM re-evaluation of `needs-feedback` issues (#414). Runs after the
-            // deterministic blocker sweep; issue-ops only (no PR, no push).
+            // The deterministic blocker sweep already ran at the top of this cycle (#47); only
+            // the expensive LLM re-evaluation of `needs-feedback` issues (#414) stays idle-gated.
+            // Issue-ops only (no PR, no push).
             await runGuarded(triageOpts());
           }
           log(`idle — nothing to do. Sleeping ${cfg.pollMinutes}m.`);
