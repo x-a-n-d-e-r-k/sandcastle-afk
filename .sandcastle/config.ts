@@ -85,6 +85,13 @@ export type Cfg = {
   triageIntervalMinutes: number;
   /** Visual verification for UI-touching PRs (#19). Omit to disable entirely. */
   ui?: UiVerifyCfg;
+  /**
+   * Extra commands run inside the sandbox at startup (#48), after `install` and before
+   * `forge git-setup`. Use for provisioning agent tooling (an MCP server, a CLI) without
+   * overloading `install` or editing source. Each runs via `sh -c` with the container env
+   * (incl. `.sandcastle/.env`); end with `|| true` to make it best-effort. Omit for none.
+   */
+  setupCommands?: string[];
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));

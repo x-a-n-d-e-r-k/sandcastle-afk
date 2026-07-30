@@ -53,6 +53,19 @@ async function runGuarded(opts: RunOptions): Promise<RunResult> {
   }
 }
 
+const INSTALL_TIMEOUT_MS = 600_000;
+const SETUP_TIMEOUT_MS = 600_000;
+
+// The sandbox startup sequence (#48). Pure + exported so the ordering — install FIRST (project
+// deps), then consumer `setupCommands` (agent tooling), then `forge git-setup` (push creds, only
+// when the phase pushes) — is unit-testable without booting Docker. Each setup command runs via
+// `sh -c` with the container env; the consumer makes it best-effort with a trailing `|| true`.
+export const sandboxReadyHooks = (install: string, setupCommands: string[], withPush: boolean) => [
+  { command: install, timeoutMs: INSTALL_TIMEOUT_MS },
+  ...setupCommands.map((command) => ({ command, timeoutMs: SETUP_TIMEOUT_MS })),
+  ...(withPush ? [{ command: "forge git-setup" }] : []),
+];
+
 const baseRun = (name: string, branch: string, promptFile: string, model: string, withPush: boolean): RunOptions => ({
   name,
   sandbox: docker({ imageName: cfg.imageName }),
@@ -62,10 +75,7 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
   maxIterations: 1,
   hooks: {
     sandbox: {
-      onSandboxReady: [
-        { command: cfg.install, timeoutMs: 600_000 },
-        ...(withPush ? [{ command: "forge git-setup" }] : []),
-      ],
+      onSandboxReady: sandboxReadyHooks(cfg.install, cfg.setupCommands ?? [], withPush),
     },
   },
   logging: { type: "stdout" } as const,

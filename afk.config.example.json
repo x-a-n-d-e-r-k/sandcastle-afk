@@ -37,6 +37,17 @@
   "idleTimeoutSeconds": 900,
   "triageIntervalMinutes": 120,
 
+  "//setupCommands": [
+    "OPTIONAL (#48). Commands run inside the sandbox at startup, AFTER `install` and BEFORE",
+    "`forge git-setup`. Use for provisioning agent tooling (an MCP server, a CLI) — NOT project",
+    "deps (those belong in `install`). Each runs via `sh -c` (so `&&`/`||`/quoting work) with the",
+    "container env, including `.sandcastle/.env` vars at RUN time (the Dockerfile build does not",
+    "see those). End a command with `|| true` to make it best-effort; leave it bare to fail the",
+    "run. Survives `afk:update` (it's your config, not layer source). Rename to `setupCommands`",
+    "(drop the `//`) to activate. Example:",
+    "  \"setupCommands\": [\"npm i -g @scope/tool && claude mcp add --scope user tool -- tool-serve || true\"]"
+  ],
+
   "//ui": [
     "OPTIONAL (#19). Omit this key entirely and nothing changes — non-UI repos are unaffected.",
     "When present, a PR whose diff matches verifyGlobs MUST publish screenshots or the loop",
