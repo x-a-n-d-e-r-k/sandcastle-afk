@@ -84,7 +84,23 @@ Everything talks to the host through `bin/forge` — a thin shim over `gh` (GitH
 
 ## Configuration (`afk.config.json`)
 
-`layerRepo` (optional — the sandcastle-afk source `pnpm afk:update` pulls from; defaults to this repo), `platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), **`priorityLabels`** (ordered most-urgent-first, default `["highest","high","low","lowest"]`), `pollMinutes`. The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+`layerRepo` (optional — the sandcastle-afk source `pnpm afk:update` pulls from; defaults to this repo), `platform`, `reviewMode`, `defaultBranch`, `packageManager` (+version), `dockerBaseImage`, `install`, **`preflight`** (the gate — the command list that defines "green"), `e2e`, `models`, `labels`, `maxHeal`, `maxPipelineRetry` (flake-retry budget before a CI failure is treated as real), `flakyJobs` (optional allowlist — only retry when the failed jobs are all in this list; empty = retry on any failure), **`priorityLabels`** (ordered most-urgent-first, default `["highest","high","low","lowest"]`), `pollMinutes`, `setupCommands` (optional — extra sandbox startup commands; see below). The `preflight` list is the single source of truth — the skill writes it into issues, the implementer must pass it, the reviewer re-runs it.
+
+### Adding a tool to the sandbox (`setupCommands`)
+
+To give the agent a tool inside the sandbox — an MCP server, a linter, a CLI — add a `setupCommands: string[]` to `afk.config.json`. Each command runs at sandbox startup, **after `install`** (project deps) and **before `forge git-setup`**, on every phase.
+
+```json
+"setupCommands": [
+  "npm i -g @scope/tool && claude mcp add --scope user tool -- tool-serve || true"
+]
+```
+
+- **Runs via `sh -c`** inside the container, so `&&`, `||`, and quoting all work.
+- **Sees the container env** — including `.sandcastle/.env` vars — at **run** time. The Dockerfile *build* does **not** see those, so anything needing a runtime secret (a private-registry token, an API key) belongs here, not baked into the image.
+- **Fatality is yours:** end a command with `|| true` to make it best-effort (a tool hiccup won't fail the run); leave it bare to abort the run on failure.
+- **Use `install` for project dependencies, `setupCommands` for agent tooling** — don't cram tool-provisioning into `install`.
+- **Survives `afk:update`** (it's your config, not layer source — no `loop.ts` edits to be clobbered).
 
 **Prioritizing issues:** the loop dispatches by **priority label first**, then `fix:`-titled before others, then oldest issue number. Add a `priorityLabels` label (e.g. `highest`/`high`/`low`/`lowest`) to bump or sink an issue; an `agent-ready` issue with **no** priority label sits in the middle (between `high` and `low`). `pnpm afk:init --labels` creates the priority labels. (Since the loop only pulls `agent-ready` and works one at a time, applying/withholding `agent-ready` is itself a coarse queue control.)
 
