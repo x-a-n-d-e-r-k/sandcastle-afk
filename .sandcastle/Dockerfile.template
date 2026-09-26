@@ -8,6 +8,11 @@ RUN apt-get update && apt-get install -y git curl jq ca-certificates && rm -rf /
 # Forge CLI (gh for GitHub, glab for GitLab)
 {{FORGE_CLI_INSTALL}}
 
+# `forge` is baked in: afk:init stages bin/forge into this build context. It can't ride in on
+# the worktree, because host repos may gitignore bin/forge as overlay. Re-run
+# `afk:init --build` after bin/forge changes.
+COPY --chmod=755 forge /usr/local/bin/forge
+
 # Package manager pre-bake (so corepack doesn't download the pinned version at runtime)
 {{PM_PREBAKE}}
 
@@ -19,8 +24,7 @@ USER ${AGENT_UID}:${AGENT_GID}
 # Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# `forge` rides in on the bind-mounted worktree at /home/agent/workspace/bin
-ENV PATH="/home/agent/workspace/bin:/home/agent/.local/bin:$PATH"
+ENV PATH="/home/agent/.local/bin:$PATH"
 ENV FORGE_PLATFORM={{PLATFORM}}
 
 WORKDIR /home/agent
