@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, renderPreflight, requireGitIdentity, gitSetupCommand } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, phaseRules, renderPreflight, requireGitIdentity, gitSetupCommand } from "./config.js";
 import * as forge from "./forge-client.js";
 import { implementUiBlock } from "./ui.js";
 
@@ -15,7 +15,7 @@ export const mainImplementOpts = (issue: number): RunOptions => ({
   agent: claudeCode(cfg.models.implement),
   promptFile: ".sandcastle/implement.md",
   promptArgs: {
-    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: loadAgentRules(),
+    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: phaseRules(loadAgentRules(), cfg.idleTimeoutSeconds), RESUME: "",
     UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT: renderPreflight(cfg.preflight),
   },
   branchStrategy: { type: "branch", branch: `agent/issue-${issue}`, baseBranch: `origin/${cfg.defaultBranch}` },
