@@ -103,3 +103,41 @@ test("single-loop (mine===\"\"): selects without writing a claim", async () => {
   assert.equal(picked?.number, 1);
   assert.deepEqual(d.edits, []);
 });
+
+// --- orphan PRs (#61): a closed orphan resolves nothing, so its issue is dispatchable again ----
+
+const orphanIssue: Issue = { number: 433, title: "do thing", labels: ["agent-ready"] };
+const closedPr = (over: Partial<PR>): PR => ({ headRef: "agent/issue-433", labels: [], merged: false, ...over });
+
+test("orphan: a ready issue whose only closed PR is labelled afk-orphan IS picked", async () => {
+  const d = deps({ listReady: () => [orphanIssue], listClosed: () => [closedPr({ labels: ["afk-orphan"] })], mine: "", loopId: "" });
+  assert.equal((await pickNextIssue([], d))?.number, 433);
+});
+
+test("orphan: the same closed-unmerged PR WITHOUT the label still blocks re-dispatch", async () => {
+  const d = deps({ listReady: () => [orphanIssue], listClosed: () => [closedPr({})], mine: "", loopId: "" });
+  assert.equal(await pickNextIssue([], d), undefined);
+});
+
+test("orphan: a merged PR blocks re-dispatch (even if somehow labelled)", async () => {
+  for (const labels of [[], ["afk-orphan"]]) {
+    const d = deps({ listReady: () => [orphanIssue], listClosed: () => [closedPr({ merged: true, labels })], mine: "", loopId: "" });
+    assert.equal(await pickNextIssue([], d), undefined);
+  }
+});
+
+test("orphan: a non-orphan closed PR alongside an orphan one still blocks", async () => {
+  const d = deps({
+    listReady: () => [orphanIssue],
+    listClosed: () => [closedPr({ labels: ["afk-orphan"] }), closedPr({})],
+    mine: "", loopId: "",
+  });
+  assert.equal(await pickNextIssue([], d), undefined);
+});
+
+test("orphan resume path: this loop's own claim whose closed PR is orphan-labelled IS resumed", async () => {
+  const claimed: Issue = { ...orphanIssue, labels: ["agent-ready", "working:a"] };
+  const d = deps({ listReady: () => [claimed], listClosed: () => [closedPr({ labels: ["afk-orphan"] })] });
+  assert.equal((await pickNextIssue([], d))?.number, 433);
+  assert.deepEqual(d.edits, []);
+});

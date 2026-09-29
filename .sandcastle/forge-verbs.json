@@ -28,6 +28,8 @@
   "pr-pipeline-retry-mark":   { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
 
   "pr-has-conflicts":         { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-head-exists":           { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "pr-close":                 { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "pr-conflict-retry-count":  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
   "pr-conflict-retry-mark":   { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "pr-conflict-retry-clear":  { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },

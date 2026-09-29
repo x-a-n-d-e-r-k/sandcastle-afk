@@ -130,6 +130,13 @@ export const prPipelineRetryMark = (num: number, ...rest: Arg[]): void => {
 export const prHasConflicts = (num: number, ...rest: Arg[]): string =>
   forge(`pr-has-conflicts ${[num, ...rest].join(" ")}`.trim());
 
+export const prHeadExists = (num: number, ...rest: Arg[]): string =>
+  forge(`pr-head-exists ${[num, ...rest].join(" ")}`.trim());
+
+export const prClose = (num: number, ...rest: Arg[]): void => {
+  forge(`pr-close ${[num, ...rest].join(" ")}`.trim());
+};
+
 export const prConflictRetryCount = (num: number, ...rest: Arg[]): string =>
   forge(`pr-conflict-retry-count ${[num, ...rest].join(" ")}`.trim());
 

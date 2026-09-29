@@ -8,11 +8,11 @@
 // This lives apart from loop.ts (which imports @ai-hero/sandcastle) on purpose: the
 // claim logic stays unit-testable with no sandbox runtime and no live forge — the deps
 // `pickNextIssue` needs are injected (realPickDeps wires the live ones).
-import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING } from "./config.js";
+import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL } from "./config.js";
 import * as forge from "./forge-client.js";
 
 export type Issue = { number: number; title: string; labels: string[] };
-export type PR = { headRef: string };
+export type PR = { headRef: string; labels?: string[]; merged?: boolean };
 
 // The claim label THIS clone writes. Empty when LOOP_ID is unset => single-loop mode:
 // no claims written, the loop owns every issue/PR (byte-for-byte today's behavior).
@@ -77,9 +77,12 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
   // closed-unmerged (rejected) — so never re-dispatch it. Excluding *merged* PRs also
   // closes a post-merge re-pick race (observed with #380): right after a merge the
   // linked issue can momentarily still look open+ready before the forge auto-closes it.
+  // EXCEPT an orphan (#61): a PR closed because its source branch never reached origin carries
+  // the orphan label and resolved nothing, so its issue stays dispatchable. Merged always counts.
+  const isOrphan = (p: PR) => !p.merged && (p.labels ?? []).includes(ORPHAN_LABEL);
   const resolved = new Set(
     listClosed()
-      .filter((p) => p.headRef.startsWith("agent/issue-"))
+      .filter((p) => p.headRef.startsWith("agent/issue-") && !isOrphan(p))
       .map((p) => p.headRef),
   );
   const hasOpenWork = (n: number) =>

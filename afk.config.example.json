@@ -30,7 +30,8 @@
     "epic": "epic",
     "idea": "idea",
     "needsHuman": "needs-human",
-    "e2eRegression": "e2e-regression"
+    "e2eRegression": "e2e-regression",
+    "orphan": "afk-orphan"
   },
   "maxHeal": 3,
   "maxPipelineRetry": 2,
