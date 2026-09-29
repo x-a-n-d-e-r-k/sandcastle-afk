@@ -1,44 +1,56 @@
-import { run, claudeCode } from "@ai-hero/sandcastle";
+import { pathToFileURL } from "node:url";
+import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, renderPreflight } from "./config.js";
 import * as forge from "./forge-client.js";
+import { implementUiBlock } from "./ui.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
 //   pnpm afk        (loops? no — use `pnpm afk:loop` for continuous)
-type Issue = { number: number; title: string; labels: string[] };
-type PR = { number: number; headRef: string; labels: string[] };
 
-const issues = forge.issueList("--label", cfg.labels.ready);
-const openHeads = new Set(
-  forge.prList().filter((p) => p.headRef.startsWith("agent/issue-")).map((p) => p.headRef),
-);
-const next = issues
-  .filter((i) => !isExcluded(i.labels))
-  .filter((i) => !openHeads.has(`agent/issue-${i.number}`))
-  .sort((a, b) => {
-    const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
-    return priorityRank(a.labels) - priorityRank(b.labels) || s(a.title) - s(b.title) || a.number - b.number;
-  })[0];
-
-if (!next) {
-  console.log("No eligible agent-ready issues (none open, or all have an open PR). Nothing to do.");
-  process.exit(0);
-}
-
-log(`Dispatching #${next.number}: ${next.title}`);
-sh(`git fetch origin ${cfg.defaultBranch}`);
-
-const r = await run({
-  name: `issue-${next.number}`,
+// Exported so the prompt-arg parity test (#55) can assert this site's shape without Docker.
+export const mainImplementOpts = (issue: number): RunOptions => ({
+  name: `issue-${issue}`,
   sandbox: docker({ imageName: cfg.imageName }),
   agent: claudeCode(cfg.models.implement),
   promptFile: ".sandcastle/implement.md",
-  promptArgs: { ISSUE_NUMBER: String(next.number), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: loadAgentRules() },
-  branchStrategy: { type: "branch", branch: `agent/issue-${next.number}`, baseBranch: `origin/${cfg.defaultBranch}` },
+  promptArgs: {
+    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: loadAgentRules(),
+    UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT: renderPreflight(cfg.preflight),
+  },
+  branchStrategy: { type: "branch", branch: `agent/issue-${issue}`, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
   hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: "forge git-setup" }] } },
   logging: { type: "stdout" },
   idleTimeoutSeconds: cfg.idleTimeoutSeconds,
 });
 
-console.log(`\nDone #${next.number}: branch ${r.branch}, commits ${r.commits.length}`);
+async function main(): Promise<void> {
+  const issues = forge.issueList("--label", cfg.labels.ready);
+  const openHeads = new Set(
+    forge.prList().filter((p) => p.headRef.startsWith("agent/issue-")).map((p) => p.headRef),
+  );
+  const next = issues
+    .filter((i) => !isExcluded(i.labels))
+    .filter((i) => !openHeads.has(`agent/issue-${i.number}`))
+    .sort((a, b) => {
+      const s = (t: string) => (/^fix/i.test(t) ? 0 : 1);
+      return priorityRank(a.labels) - priorityRank(b.labels) || s(a.title) - s(b.title) || a.number - b.number;
+    })[0];
+
+  if (!next) {
+    console.log("No eligible agent-ready issues (none open, or all have an open PR). Nothing to do.");
+    process.exit(0);
+  }
+
+  log(`Dispatching #${next.number}: ${next.title}`);
+  sh(`git fetch origin ${cfg.defaultBranch}`);
+
+  const r = await run(mainImplementOpts(next.number));
+
+  console.log(`\nDone #${next.number}: branch ${r.branch}, commits ${r.commits.length}`);
+}
+
+// Only dispatch when run as the entry point — importing (the test suite) must not.
+const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) await main();

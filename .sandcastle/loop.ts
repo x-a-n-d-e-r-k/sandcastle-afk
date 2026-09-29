@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential } from "./config.js";
+import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -9,6 +9,9 @@ import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped }
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 
 const RULES = loadAgentRules();
+// The preflight gate travels in the prompt, not as a file: the gitignored .sandcastle/preflight.sh
+// is never in the sandbox worktree (#55). Every phase that runs preflight gets it; triage doesn't.
+const PREFLIGHT = renderPreflight(cfg.preflight);
 
 // ---------------------------------------------------------------------------
 // AFK orchestrator daemon (concurrency = 1), forge-agnostic.
@@ -91,7 +94,7 @@ export const implementOpts = (issue: number): RunOptions => ({
   // conditional enforcement once a diff exists. Empty string when `ui` is unset.
   promptArgs: {
     ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES,
-    UI_VERIFICATION: implementUiBlock(cfg.ui),
+    UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT,
   },
 });
 export const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
@@ -102,7 +105,7 @@ export const reviewOpts = (pr: number, branch: string, issue: string): RunOption
   agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptArgs: {
     PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES,
-    UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui),
+    UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT,
   },
 });
 export const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
@@ -110,11 +113,11 @@ export const healOpts = (pr: number, branch: string, issue: string): RunOptions 
   // A heal can rewrite UI, invalidating the pre-heal screenshots (they key on the old head
   // SHA now, #35), so the healing agent must know to re-render and re-publish. Empty when the
   // consumer has no `ui` config.
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui) },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
 });
 export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui) },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
 });
 
 // Idle-triage `needs-feedback` re-evaluation agent (#414). Issue-ops only: it reads each

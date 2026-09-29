@@ -16,7 +16,9 @@ You are an autonomous coding agent. Implement the single issue above, end to end
 2. **Red** — write a failing test that encodes the acceptance criteria.
 3. **Green** — implement the minimal code to pass; export/wire it appropriately.
 4. **Refactor** — tidy up while keeping the test green.
-5. **Preflight (MUST pass before committing)** — run `bash .sandcastle/preflight.sh` and fix until it exits 0.
+5. **Preflight (MUST pass before committing)** — run the preflight commands below and fix until they exit 0:
+
+{{PREFLIGHT}}
 6. **Commit** — one focused commit referencing the issue number.
 7. **Push** — `git push -u origin HEAD`.
 8. **Open a PR** — target `{{BASE_BRANCH}}`. The body MUST contain `Closes #{{ISSUE_NUMBER}}` so the issue closes on merge:
