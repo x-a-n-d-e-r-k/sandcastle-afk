@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Contract test for `forge pr-create` body validation (afk-loop issue auto-close).
+# Contract test for `forge pr-create`: body validation (afk-loop issue auto-close) and the
+# pushed-branch guard (#59).
 #
 # GitHub/GitLab read the closing keyword from the PR/MR body only. `pr-create` used to
 # validate --base and --title but not --body, so `gh pr create --body ""` succeeded and the
@@ -27,17 +28,23 @@ chmod +x "$TMP/gh"
 
 # forge reads the branch via `git branch --show-current`, so drive it from a throwaway repo
 # rather than depending on whatever branch this checkout happens to be on.
+# It has a real bare `origin`: pr-create refuses a branch that isn't pushed at HEAD (#59).
 REPO="$TMP/repo"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+git init -q --bare "$TMP/origin.git"
 mkdir -p "$REPO"
 git -C "$REPO" init -q
 git -C "$REPO" config user.email t@t.test
 git -C "$REPO" config user.name t
+git -C "$REPO" remote add origin "$TMP/origin.git"
 git -C "$REPO" commit -q --allow-empty -m init
 
-# Run forge from $REPO on branch $1, with the fake gh on PATH; args follow.
+# Run forge from $REPO on branch $1 (pushed, so the body cases reach the body logic), with the
+# fake gh on PATH; args follow.
 on_branch() {
   local br="$1"; shift
   git -C "$REPO" checkout -q -B "$br"
+  git -C "$REPO" push -q -f origin "$br"
   ( cd "$REPO" && PATH="$TMP:$PATH" FORGE_PLATFORM=github \
       GH_ARGS="${GH_ARGS:-/dev/null}" GH_BODY="${GH_BODY:-/dev/null}" "$FORGE" "$@" )
 }
@@ -96,4 +103,51 @@ if GH_ARGS="$ARGS" on_branch agent/issue-42 pr-create --base main --title "fix: 
 fi
 [[ ! -s "$ARGS" ]] || fail "pr-create must not invoke gh for a nonexistent --body-file"
 
-echo "PASS: forge pr-create requires a non-empty body and guarantees a closing keyword"
+# --- 8) pushed-branch guard (#59), GitHub and GitLab alike ---------------------
+# Stubs record every call; a refusal must leave the log empty.
+printf '#!/usr/bin/env bash\necho "$*" >> "${GH_ARGS:-/dev/null}"\nexit 0\n' > "$TMP/glab"
+chmod +x "$TMP/glab"
+# Run pr-create on the CURRENT checkout state (no checkout/push), on platform $1.
+create() {
+  local plat="$1"; shift
+  ( cd "$REPO" && PATH="$TMP:$PATH" FORGE_PLATFORM="$plat" GH_ARGS="$ARGS" \
+      "$FORGE" pr-create --base main --title "fix: x" --body "Closes #42" "$@" ) 2>"$TMP/err"
+}
+refuses() {  # $1 platform, $2 expected stderr fragment, $3 case name
+  : > "$ARGS"
+  if create "$1"; then fail "[$1] $3: pr-create should exit non-zero"; fi
+  [[ ! -s "$ARGS" ]] || fail "[$1] $3: forge must not call the forge CLI (got: $(cat "$ARGS"))"
+  grep -q -- "$2" "$TMP/err" || fail "[$1] $3: stderr should mention '$2' (got: $(cat "$TMP/err"))"
+}
+
+for plat in github gitlab; do
+  # (a) branch never pushed
+  git -C "$REPO" checkout -q -B "agent/issue-9$plat"
+  refuses "$plat" "not on origin" "never-pushed branch"
+
+  # (b) pushed, then a local commit origin doesn't have
+  git -C "$REPO" push -q origin "agent/issue-9$plat"
+  git -C "$REPO" commit -q --allow-empty -m "unpushed"
+  refuses "$plat" "push first" "origin behind local HEAD"
+
+  # (c) pushed and in sync: exactly one call, as today
+  git -C "$REPO" push -q origin "agent/issue-9$plat"
+  : > "$ARGS"
+  create "$plat" || fail "[$plat] in-sync branch: pr-create should succeed (stderr: $(cat "$TMP/err"))"
+  [[ "$(wc -l < "$ARGS" | tr -d ' ')" == 1 ]] || fail "[$plat] in-sync branch: expected exactly one CLI call (got: $(cat "$ARGS"))"
+  if [[ "$plat" == gitlab ]]; then
+    grep -q -- "--source-branch agent/issue-9gitlab " "$ARGS" || fail "[gitlab] --source-branch must be the branch (got: $(cat "$ARGS"))"
+  fi
+
+  # (d) detached HEAD
+  git -C "$REPO" checkout -q --detach
+  refuses "$plat" "detached HEAD" "detached HEAD"
+
+  # (e) ls-remote fails (origin unreachable) — fail closed
+  git -C "$REPO" checkout -q "agent/issue-9$plat"
+  git -C "$REPO" remote set-url origin "$TMP/does-not-exist.git"
+  refuses "$plat" "ls-remote failed" "unreachable origin"
+  git -C "$REPO" remote set-url origin "$TMP/origin.git"
+done
+
+echo "PASS: forge pr-create requires a non-empty body, guarantees a closing keyword, and refuses a branch not pushed at HEAD"
