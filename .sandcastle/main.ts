@@ -1,6 +1,6 @@
 import { run, claudeCode } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, requireGitIdentity, gitSetupCommand } from "./config.js";
 import * as forge from "./forge-client.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
@@ -36,7 +36,7 @@ const r = await run({
   promptArgs: { ISSUE_NUMBER: String(next.number), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: loadAgentRules() },
   branchStrategy: { type: "branch", branch: `agent/issue-${next.number}`, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
-  hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: "forge git-setup" }] } },
+  hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: gitSetupCommand(requireGitIdentity(cfg.gitIdentity)) }] } },
   logging: { type: "stdout" },
   idleTimeoutSeconds: cfg.idleTimeoutSeconds,
 });

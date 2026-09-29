@@ -19,6 +19,11 @@ USER ${AGENT_UID}:${AGENT_GID}
 # Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
+# No AI co-author trailer on ANY phase's commits (#52): squash merges copy every branch
+# commit message, so one heal commit's trailer lands on the default branch. `attribution`
+# is the current setting; `includeCoAuthoredBy` is its predecessor, kept for older CLIs.
+RUN mkdir -p /home/agent/.claude && echo '{"includeCoAuthoredBy":false,"attribution":{"commit":"","pr":""}}' > /home/agent/.claude/settings.json
+
 # `forge` rides in on the bind-mounted worktree at /home/agent/workspace/bin
 ENV PATH="/home/agent/workspace/bin:/home/agent/.local/bin:$PATH"
 ENV FORGE_PLATFORM={{PLATFORM}}

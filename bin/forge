@@ -30,6 +30,7 @@ esac
 # Collect repeated --label values and pass-through of common flags.
 labels=(); title=""; body=""; body_file=""; base=""; comment=""; state="open"
 add_labels=(); rm_labels=(); new_title=""; POS=(); SQUASH=0; DELBR=0; REVIEWER=0; NOAUTO=0
+git_name=""; git_email=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --label) labels+=("$2"); shift 2 ;;
@@ -46,6 +47,8 @@ while [[ $# -gt 0 ]]; do
     --delete-branch) DELBR=1; shift ;;
     --as-reviewer) REVIEWER=1; shift ;;
     --no-auto-merge) NOAUTO=1; shift ;;
+    --git-name) git_name="$2"; shift 2 ;;
+    --git-email) git_email="$2"; shift 2 ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -414,7 +417,15 @@ case "$verb" in
     [[ -n "$NUM" ]] || die "pr-conflict-retry-mark needs <number>"
     if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:conflict-retry]"; else glab mr note "$NUM" -m "[forge:conflict-retry]"; fi ;;
 
-  git-setup)  # configure git push credentials for the current platform's token
+  git-setup)  # configure git push credentials (+ commit identity, when given) for the current platform
+    # [--git-name N --git-email E]: pin the commit identity (#52). Upstream copies the HOST
+    # clone's user.name/email into each sandbox, so without this every phase commits as
+    # whichever clone/config ran it. Both or neither — a half-set identity is a config bug.
+    if [[ -n "$git_name" || -n "$git_email" ]]; then
+      [[ -n "$git_name" && -n "$git_email" ]] || die "git-setup needs both --git-name and --git-email"
+      git config --global user.name "$git_name"
+      git config --global user.email "$git_email"
+    fi
     if [[ "$PLATFORM" == github ]]; then
       git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
     else

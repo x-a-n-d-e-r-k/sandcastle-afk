@@ -92,9 +92,38 @@ export type Cfg = {
    * (incl. `.sandcastle/.env`); end with `|| true` to make it best-effort. Omit for none.
    */
   setupCommands?: string[];
+  /**
+   * The ONE git identity every pushing phase (implement, heal, resolve) commits as (#52).
+   * Required: without it, upstream copies whichever host clone's user.name/email ran the
+   * phase, so commits on one PR end up with different authors.
+   */
+  gitIdentity: GitIdentity;
 };
 
+export type GitIdentity = { name: string; email: string };
+
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+
+// Pure validator for `gitIdentity` (#52). No default on purpose: a silent fallback to the host
+// clone's identity is exactly the drift this exists to stop. Throws naming the key to set.
+export const requireGitIdentity = (id: Partial<GitIdentity> | undefined): GitIdentity => {
+  const name = id?.name?.trim(), email = id?.email?.trim();
+  if (!name || !email) {
+    throw new Error(
+      'afk.config.json needs `gitIdentity: { "name": "...", "email": "..." }` — the single git author ' +
+      "for every pushing phase (implement, heal, resolve). Use your implementer bot account, e.g. " +
+      '{ "name": "my-dev-bot", "email": "my-dev-bot@users.noreply.github.com" }.',
+    );
+  }
+  return { name, email };
+};
+
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+// The sandbox hook that sets push credentials AND pins the commit identity. It runs after
+// upstream copies the host clone's identity in, so it wins.
+export const gitSetupCommand = (id: GitIdentity): string =>
+  `forge git-setup --git-name ${shq(id.name)} --git-email ${shq(id.email)}`;
 
 const FORGE = join(ROOT, "bin", "forge");
 

@@ -38,6 +38,8 @@ const e2e = scripts["test:e2e"] ? run("test:e2e") : "";
 const cfg = {
   platform, reviewMode: "internal", defaultBranch, packageManager: pm, packageManagerVersion: pmVersion, dockerBaseImage,
   install, preflight: preflight.length ? preflight : [run("test")], e2e, imageName: "sandcastle-afk",
+  // Required (#52): fill in your implementer bot. Left blank so the loop refuses to start until you do.
+  gitIdentity: { name: "", email: "" },
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
   maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[],

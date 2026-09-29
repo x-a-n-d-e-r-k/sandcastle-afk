@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential } from "./config.js";
+import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -57,13 +57,14 @@ const INSTALL_TIMEOUT_MS = 600_000;
 const SETUP_TIMEOUT_MS = 600_000;
 
 // The sandbox startup sequence (#48). Pure + exported so the ordering — install FIRST (project
-// deps), then consumer `setupCommands` (agent tooling), then `forge git-setup` (push creds, only
-// when the phase pushes) — is unit-testable without booting Docker. Each setup command runs via
-// `sh -c` with the container env; the consumer makes it best-effort with a trailing `|| true`.
-export const sandboxReadyHooks = (install: string, setupCommands: string[], withPush: boolean) => [
+// deps), then consumer `setupCommands` (agent tooling), then `forge git-setup` (push creds +
+// the pinned commit identity, #52 — only when the phase pushes, i.e. `pushAs` is set) — is
+// unit-testable without booting Docker. Each setup command runs via `sh -c` with the container
+// env; the consumer makes it best-effort with a trailing `|| true`.
+export const sandboxReadyHooks = (install: string, setupCommands: string[], pushAs: GitIdentity | null) => [
   { command: install, timeoutMs: INSTALL_TIMEOUT_MS },
   ...setupCommands.map((command) => ({ command, timeoutMs: SETUP_TIMEOUT_MS })),
-  ...(withPush ? [{ command: "forge git-setup" }] : []),
+  ...(pushAs ? [{ command: gitSetupCommand(pushAs) }] : []),
 ];
 
 const baseRun = (name: string, branch: string, promptFile: string, model: string, withPush: boolean): RunOptions => ({
@@ -75,7 +76,7 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
   maxIterations: 1,
   hooks: {
     sandbox: {
-      onSandboxReady: sandboxReadyHooks(cfg.install, cfg.setupCommands ?? [], withPush),
+      onSandboxReady: sandboxReadyHooks(cfg.install, cfg.setupCommands ?? [], withPush ? requireGitIdentity(cfg.gitIdentity) : null),
     },
   },
   logging: { type: "stdout" } as const,
@@ -170,6 +171,8 @@ async function main(): Promise<void> {
   // Fail fast if the reviewer credential is misplaced (in .env, where it leaks to every
   // sandbox) or missing in internal mode — before any container starts (#32).
   checkReviewCredential();
+  // Same for the commit identity (#52): refuse to start rather than fail every pushing cycle.
+  requireGitIdentity(cfg.gitIdentity);
   let lastTriageAt: number | null = null;
   log(`AFK loop starting (concurrency 1, platform ${cfg.platform}, review ${cfg.reviewMode}${DRY ? ", DRY-RUN" : ""}). \`pnpm afk:stop\` stops after the current run; Ctrl-C stops sooner (again to force).`);
 
