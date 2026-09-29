@@ -175,6 +175,18 @@ case "$verb" in
   # ---------- pull / merge requests ----------
   pr-create)
     [[ -n "$base" && -n "$title" ]] || die "pr-create needs --base and --title"
+    # The branch must already be on origin, AT the local HEAD (#59). GitLab accepts an MR for a
+    # source branch that doesn't exist — no commit, no pipeline, can never merge — and the
+    # prompt's "push first" is advisory. Fail closed: an ls-remote error is a refusal too.
+    cur="$(git branch --show-current 2>/dev/null || true)"
+    [[ -n "$cur" ]] || die "pr-create: not on a branch (detached HEAD)"
+    local_sha="$(git rev-parse HEAD)" || die "pr-create: cannot resolve HEAD"
+    remote_line="$(git ls-remote --heads origin "refs/heads/$cur")" \
+      || die "pr-create: could not reach origin to verify '$cur' was pushed (git ls-remote failed)"
+    remote_sha="$(cut -f1 <<<"$remote_line")"
+    [[ -n "$remote_sha" ]] || die "pr-create: branch '$cur' is not on origin — run: git push -u origin HEAD"
+    [[ "$remote_sha" == "$local_sha" ]] \
+      || die "pr-create: origin/$cur is at ${remote_sha:0:8} but local HEAD is ${local_sha:0:8} — push first"
     # A PR body is load-bearing: GitHub/GitLab read the closing keyword from it, so a
     # bodyless PR merges without ever closing its issue (zombie issue, re-investigated
     # by the next agent). The prompt asks for it; only forge can enforce it.
@@ -186,7 +198,6 @@ case "$verb" in
     if ! grep -qiE '(closes|fixes|resolves) #[0-9]+' <<<"$body"; then
       # Self-correct off the loop's branch convention (agent/issue-<N>). Same derivation
       # as review.ts's fallback, so both agree on which issue this PR belongs to.
-      cur="$(git branch --show-current 2>/dev/null || true)"
       [[ "$cur" =~ issue-([0-9]+) ]] \
         || die "pr-create: body has no closing keyword (Closes/Fixes/Resolves #<n>) and branch '$cur' has no issue number to derive one from"
       body="Closes #${BASH_REMATCH[1]}"$'\n\n'"$body"
@@ -194,7 +205,7 @@ case "$verb" in
     if [[ "$PLATFORM" == github ]]; then
       gh pr create --base "$base" --title "$title" --body "$body"
     else
-      glab mr create --source-branch "$(git branch --show-current)" --target-branch "$base" \
+      glab mr create --source-branch "$cur" --target-branch "$base" \
         --title "$title" --description "$body" --yes --remove-source-branch
     fi ;;
 
