@@ -405,17 +405,25 @@ case "$verb" in
       glab api "projects/$pid/merge_requests/$iid" | jq -r '.has_conflicts // false'
     fi ;;
 
-  pr-conflict-retry-count)  # count of [forge:conflict-retry] markers (stateless conflict-resolve budget)
+  pr-conflict-retry-count)  # CONSECUTIVE failed conflict resolutions: [forge:conflict-retry] markers after the last [forge:conflict-resolved] (#54)
     [[ -n "$NUM" ]] || die "pr-conflict-retry-count needs <number>"
+    # A lifetime total parks a healthy PR the Nth time main moves under it, even when every
+    # earlier resolution succeeded. Count only the attempts since the last success.
+    since_reset='(map(startswith("[forge:conflict-resolved]")) | indices(true) | last) as $i
+      | .[(if $i == null then 0 else $i + 1 end):] | map(select(startswith("[forge:conflict-retry]"))) | length'
     if [[ "$PLATFORM" == github ]]; then
-      gh pr view "$NUM" --json comments | jq '[.comments[] | select(.body | startswith("[forge:conflict-retry]"))] | length'
+      gh pr view "$NUM" --json comments | jq "[.comments[].body] | $since_reset"
     else
-      glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:conflict-retry]"))] | length' 2>/dev/null || echo 0
+      glab mr note list "$NUM" -F json 2>/dev/null | jq "[.[].notes[]?.body] | $since_reset" 2>/dev/null || echo 0
     fi ;;
 
   pr-conflict-retry-mark)  # record one conflict-resolve attempt
     [[ -n "$NUM" ]] || die "pr-conflict-retry-mark needs <number>"
     if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:conflict-retry]"; else glab mr note "$NUM" -m "[forge:conflict-retry]"; fi ;;
+
+  pr-conflict-retry-clear)  # record a SUCCESSFUL conflict resolution: resets the consecutive-failure count to 0 (#54)
+    [[ -n "$NUM" ]] || die "pr-conflict-retry-clear needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:conflict-resolved]"; else glab mr note "$NUM" -m "[forge:conflict-resolved]"; fi ;;
 
   git-setup)  # configure git push credentials (+ commit identity, when given) for the current platform
     # [--git-name N --git-email E]: pin the commit identity (#52). Upstream copies the HOST

@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, loadAgentRules, reviewAgentEnv, checkReviewCredential, renderPreflight } from "./config.js";
+import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight } from "./config.js";
 import * as forge from "./forge-client.js";
 import { uiGate, reviewUiBlock } from "./ui.js";
 
@@ -14,7 +14,7 @@ export const cliReviewOpts = (pr: number, branch: string, issue: string): RunOpt
   agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptFile: ".sandcastle/review.md",
   promptArgs: {
-    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: loadAgentRules(),
+    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: phaseRules(loadAgentRules(), cfg.idleTimeoutSeconds),
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT: renderPreflight(cfg.preflight),
   },
   branchStrategy: { type: "branch", branch, baseBranch: `origin/${cfg.defaultBranch}` },

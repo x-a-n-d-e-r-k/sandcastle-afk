@@ -98,11 +98,36 @@ export type Cfg = {
    * phase, so commits on one PR end up with different authors.
    */
   gitIdentity: GitIdentity;
+  /**
+   * Re-review a PR after the loop merged the base branch into it mechanically — no agent, only
+   * .gitattributes merge drivers (#54). Default true (today's behaviour: every new head is
+   * re-reviewed). Set false to let a mechanical base-merge keep its existing review state.
+   */
+  rereviewAfterMechanicalMerge?: boolean;
+  /**
+   * How many times an implement run cut off mid-work (idle timeout, crash) may resume from its
+   * `wip(#n): checkpoint` commit before the issue is escalated to needsHuman (#53). Required,
+   * no default: validated when the config loads.
+   */
+  maxResume: number;
 };
 
 export type GitIdentity = { name: string; email: string };
 
+// Pure so the missing/invalid case is unit-testable; applied to the loaded config just below,
+// so a config without it fails at load rather than on the first killed run (#53).
+export const assertMaxResume = (v: unknown): void => {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+    throw new Error(
+      "afk.config.json needs `maxResume` (a non-negative integer, no default): how many times an " +
+      "implement run killed mid-work (e.g. idle timeout) may resume from its checkpoint commit before " +
+      "the issue is escalated to a human. Example: \"maxResume\": 2.",
+    );
+  }
+};
+
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+assertMaxResume(cfg.maxResume);
 
 // Pure validator for `gitIdentity` (#52). No default on purpose: a silent fallback to the host
 // clone's identity is exactly the drift this exists to stop. Throws naming the key to set.
@@ -118,7 +143,8 @@ export const requireGitIdentity = (id: Partial<GitIdentity> | undefined): GitIde
   return { name, email };
 };
 
-const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+// Single-quote a value for a POSIX shell command line.
+export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // The sandbox hook that sets push credentials AND pins the commit identity. It runs after
 // upstream copies the host clone's identity in, so it wins.
@@ -289,6 +315,24 @@ export const priorityRank = (labels: string[]): number => {
 // House rules injected into every agent prompt. Resolved from cfg.agentRules
 // (paths/URLs) into .sandcastle/agent-rules.md by `pnpm afk:rules` / `afk:init`;
 // this just reads the cache (no network at run time). Empty -> "" (no-op).
+// Layer rule for every phase that runs long commands (#53). Liveness upstream is OUTPUT-only: a
+// single silent Bash call longer than idleTimeoutSeconds gets the whole run killed, however busy
+// it is. Supplements the checkpoint/resume path; not a fix on its own.
+export const livenessRule = (idleTimeoutSeconds: number): string => `## Long-running commands (the run is killed after ${Math.round(idleTimeoutSeconds / 60)} min with no output)
+
+The harness only sees your OUTPUT. A command that runs silently for longer than that — even while it is working — gets this whole run killed and your uncommitted work checkpointed mid-thought. So any command you expect to take more than ~5 minutes (a full test suite, preflight, a repro loop, a big build) must run in the BACKGROUND with its output going to a file, and you poll that file with short commands that each print something:
+
+\`\`\`bash
+( <long command> > /tmp/long.log 2>&1; echo "EXIT=$?" >> /tmp/long.log ) &
+sleep 60; tail -n 5 /tmp/long.log     # repeat until the EXIT= line appears, then read the result
+\`\`\`
+`;
+
+// House rules plus the liveness rule, for the phases that run preflight/tests (implement, heal,
+// resolve, review). Triage doesn't run long commands and keeps the plain house rules.
+export const phaseRules = (houseRules: string, idleTimeoutSeconds: number): string =>
+  `${houseRules}${houseRules ? "\n" : ""}${livenessRule(idleTimeoutSeconds)}`;
+
 export const loadAgentRules = (): string => {
   const p = join(ROOT, ".sandcastle", "agent-rules.md");
   if (!existsSync(p)) return "";

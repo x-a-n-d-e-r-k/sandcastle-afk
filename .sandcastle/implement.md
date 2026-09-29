@@ -6,6 +6,8 @@
 
 {{AGENT_RULES}}
 
+{{RESUME}}
+
 # Task
 
 You are an autonomous coding agent. Implement the single issue above, end to end, on the current git branch, using test-driven development.

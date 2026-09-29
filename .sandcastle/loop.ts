@@ -1,14 +1,18 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
+import { handleConflict, mechanicalMerge, baseTip, branchContains } from "./conflicts.js";
+import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
 const RULES = loadAgentRules();
+// Phases that run long commands also get the liveness rule (#53); triage keeps plain house rules.
+const PHASE_RULES = phaseRules(RULES, cfg.idleTimeoutSeconds);
 // The preflight gate travels in the prompt, not as a file: the gitignored .sandcastle/preflight.sh
 // is never in the sandbox worktree (#55). Every phase that runs preflight gets it; triage doesn't.
 const PREFLIGHT = renderPreflight(cfg.preflight);
@@ -30,10 +34,6 @@ type PR = { number: number; headRef: string; reviewState: string; labels: string
 const EXTERNAL = cfg.reviewMode === "external";
 
 // --- usage-limit guard (best-effort patterns; tune on first real limit) -----
-const USAGE_PATTERNS = [
-  /usage limit/i, /rate limit/i, /\b429\b/, /too many requests/i,
-  /quota/i, /overloaded/i, /capacity/i, /resets? (?:at|in)/i, /try again later/i,
-];
 function parseResetMs(msg: string): number | null {
   const iso = msg.match(/resets?\s+(?:at\s+)?(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/i);
   if (iso) { const t = Date.parse(iso[1]); if (!Number.isNaN(t)) return Math.max(0, t - Date.now()); }
@@ -47,7 +47,7 @@ async function runGuarded(opts: RunOptions): Promise<RunResult> {
     try { return await run(opts); }
     catch (e) {
       const msg = (e as Error)?.message ?? String(e);
-      if (!USAGE_PATTERNS.some((p) => p.test(msg)) || attempt >= MAX_USAGE_WAITS) throw e;
+      if (!isUsageError(msg) || attempt >= MAX_USAGE_WAITS) throw e;
       attempt++;
       const wait = parseResetMs(msg) ?? Math.min(30 * 60_000, 60_000 * 2 ** (attempt - 1));
       log(`usage/rate limit (attempt ${attempt}/${MAX_USAGE_WAITS}); waiting ${Math.round(wait / 60_000)}m then resuming same branch. [${msg.slice(0, 120)}]`);
@@ -88,13 +88,15 @@ const baseRun = (name: string, branch: string, promptFile: string, model: string
 
 // Exported for the credential test (#32): assert the reviewer token is present in the review
 // run's agent env and ABSENT from every other phase — without booting Docker.
-export const implementOpts = (issue: number): RunOptions => ({
+export const implementOpts = (issue: number, resume = false): RunOptions => ({
   ...baseRun(`issue-${issue}`, `agent/issue-${issue}`, ".sandcastle/implement.md", cfg.models.implement, true),
   // Not diff-conditional: at implement time the agent hasn't written the code yet, so there is
   // no diff to match. Injected whenever `ui` is configured; the host gate (uiGate) does the
   // conditional enforcement once a diff exists. Empty string when `ui` is unset.
   promptArgs: {
-    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES,
+    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES,
+    // Resuming from a checkpoint commit left by a killed attempt (#53); "" on a fresh dispatch.
+    RESUME: resume ? resumePrompt(issue) : "",
     UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT,
   },
 });
@@ -105,7 +107,7 @@ export const reviewOpts = (pr: number, branch: string, issue: string): RunOption
   // is unset (external mode); internal mode is guaranteed the token by checkReviewCredential().
   agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptArgs: {
-    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES,
+    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES,
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT,
   },
 });
@@ -114,11 +116,11 @@ export const healOpts = (pr: number, branch: string, issue: string): RunOptions 
   // A heal can rewrite UI, invalidating the pre-heal screenshots (they key on the old head
   // SHA now, #35), so the healing agent must know to re-render and re-publish. Empty when the
   // consumer has no `ui` config.
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
 });
 export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
 });
 
 // Idle-triage `needs-feedback` re-evaluation agent (#414). Issue-ops only: it reads each
@@ -239,20 +241,38 @@ async function main(): Promise<void> {
         const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
 
         // Conflicts with the base branch block BOTH review and merge, so resolve them
-        // first. A sandbox pass merges the base branch in and fixes the markers; capped
-        // like heal so a conflict the agent can't resolve escalates to a human instead
-        // of wedging the loop (the failure mode that needs manual rescue otherwise). A
-        // conflicted PR can't be reviewed or merged, so skip the rest of this cycle.
+        // first (#54): a host-side `git merge` honours .gitattributes merge drivers the forge's
+        // mergeability check ignores, so try it before spending an agent run; only a real
+        // conflict goes to the sandbox resolver. Capped at MAX_HEAL CONSECUTIVE failures (any
+        // success resets it) so an unresolvable conflict escalates instead of wedging the loop,
+        // while a PR that main keeps moving under is never parked for succeeding. A conflicted
+        // PR can't be reviewed or merged, so skip the rest of this cycle.
         if (forge.prHasConflicts(pr.number) === "true") {
-          const tries = Number(forge.prConflictRetryCount(pr.number)) || 0;
-          if (tries >= MAX_HEAL) {
-            log(`PR #${pr.number} conflict-resolve cap (${tries}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
-            escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} attempts`);
-          } else {
-            log(`PR #${pr.number} conflicts with ${cfg.defaultBranch} -> resolve ${tries + 1}/${MAX_HEAL}`);
-            forge.prConflictRetryMark(pr.number);
-            syncBranch(branch);
-            await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+          log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
+          const outcome = await handleConflict(pr.number, {
+            maxFailures: MAX_HEAL,
+            failures: () => Number(forge.prConflictRetryCount(pr.number)) || 0,
+            markAttempt: () => forge.prConflictRetryMark(pr.number),
+            markResolved: () => forge.prConflictRetryClear(pr.number),
+            mechanical: () => mechanicalMerge({
+              repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
+            }),
+            agent: async () => {
+              const sha = baseTip(ROOT, cfg.defaultBranch);
+              syncBranch(branch);
+              await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+              return branchContains(ROOT, branch, sha);
+            },
+            escalate: (n) => {
+              log(`PR #${pr.number} conflict-resolve cap (${n}/${MAX_HEAL} consecutive) -> escalating to ${L.needsHuman}`);
+              escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} consecutive attempts`);
+            },
+            log,
+          });
+          // A new head needs a fresh review — except, if the consumer opts out, one that only
+          // merged the base branch in mechanically. A failed agent resolve is retried next cycle.
+          const rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
+          if (rereview) {
             syncBranch(branch);
             if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
             else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
@@ -334,11 +354,28 @@ async function main(): Promise<void> {
       } else {
         const next = await pickNextIssue(all, realPickDeps(L.ready, DRY));
         if (next) {
-          log(`dispatching #${next.number}: ${next.title}`);
+          const n = next.number;
+          log(`dispatching #${n}: ${next.title}`);
           sh(`git fetch origin ${cfg.defaultBranch}`);
-          deleteStaleBranch(next.number);
-          await runGuarded(implementOpts(next.number));
-          log(`opened PR for #${next.number}`);
+          // A run killed mid-work (idle timeout, crash) leaves a `wip(#n): checkpoint` commit on
+          // its branch; resume from it instead of deleting it, up to maxResume times (#53).
+          const kind = await dispatchIssue(n, {
+            maxResume: cfg.maxResume,
+            hasCheckpoint: () => hasCheckpoint({ issue: n, repo: ROOT, base: cfg.defaultBranch }),
+            resumes: () => countResumes(forge.issueComments(n)),
+            markResume: (k) => forge.issueComment(n, "--body", JSON.stringify(`${RESUME_MARKER} resuming from checkpoint (${k}/${cfg.maxResume})`)),
+            escalate: (k) => {
+              log(`#${n} resumed ${k}/${cfg.maxResume} times without finishing -> escalating to ${L.needsHuman}`);
+              forge.issueEdit(n, "--add-label", L.needsHuman);
+              forge.issueComment(n, "--body", JSON.stringify(`AFK: implement was cut off and resumed from a checkpoint ${k} time(s) (maxResume ${cfg.maxResume}) without opening a PR. The work so far is on \`agent/issue-${n}\`. Parking for a human.`));
+            },
+            deleteBranch: () => deleteStaleBranch(n),
+            keepBranch: () => syncBranch(`agent/issue-${n}`),
+            implement: (resume) => runGuarded(implementOpts(n, resume)),
+            checkpoint: (err) => checkpointAfterFailure({ issue: n, err, repo: ROOT, identity: requireGitIdentity(cfg.gitIdentity) }),
+            log,
+          });
+          if (kind !== "escalate") log(`opened PR for #${n}`);
         } else {
           if (shouldRunTriage(Date.now(), lastTriageAt, cfg.triageIntervalMinutes * 60_000)) {
             lastTriageAt = Date.now();
