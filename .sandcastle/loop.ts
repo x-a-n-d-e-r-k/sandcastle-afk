@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -150,6 +150,37 @@ function deleteStaleBranch(issue: number) {
   try { sh(`git branch -D ${b}`); } catch {}
 }
 
+// PR classification before the conflict path (#61). An orphan — its source branch doesn't exist
+// on origin — reads as "conflicting" on GitLab, which used to burn maxHeal resolve-conflicts runs
+// against a branch that isn't there and then escalate with a misleading message. `head` comes
+// from forge pr-head-exists; "error" means it couldn't be determined: fail closed and touch
+// nothing this cycle. hasConflicts is only asked once the head is known to exist.
+export type PrClass = "skip" | "orphan" | "conflicted" | "ok";
+export const classifyPr = (head: boolean | "error", hasConflicts: () => boolean): PrClass => {
+  if (head === "error") return "skip";
+  if (head === false) return "orphan";
+  return hasConflicts() ? "conflicted" : "ok";
+};
+
+export type OrphanDeps = {
+  comment: (body: string) => void;
+  label: (label: string) => void;
+  close: () => void;
+  releaseClaim: () => void;
+  log: (m: string) => void;
+};
+
+// Close an owned orphan PR so its issue is re-dispatched. Labels FIRST: the label is what lets
+// pickNextIssue dispatch the issue again, so a PR must never end up closed without it (that
+// strands the issue — the bug this fixes). Never marks a conflict retry, resolves or escalates.
+export function handleOrphan(pr: { number: number; headRef: string }, d: OrphanDeps): void {
+  d.log(`PR #${pr.number}: source branch ${pr.headRef} is missing on origin -> closing as orphan`);
+  d.label(ORPHAN_LABEL);
+  d.comment(`AFK: source branch ${pr.headRef} does not exist on origin — closing this orphaned PR; the issue will be re-dispatched.`);
+  d.close();
+  d.releaseClaim();
+}
+
 function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
   forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
@@ -247,7 +278,30 @@ async function main(): Promise<void> {
         // success resets it) so an unresolvable conflict escalates instead of wedging the loop,
         // while a PR that main keeps moving under is never parked for succeeding. A conflicted
         // PR can't be reviewed or merged, so skip the rest of this cycle.
-        if (forge.prHasConflicts(pr.number) === "true") {
+        let head: boolean | "error";
+        try {
+          const out = forge.prHeadExists(pr.number);
+          head = out === "true" ? true : out === "false" ? false : "error";
+          if (head === "error") log(`PR #${pr.number}: pr-head-exists gave unexpected output "${out}"`);
+        } catch (e) {
+          log(`PR #${pr.number}: could not verify its source branch (${(e as Error).message.split("\n")[0]})`);
+          head = "error";
+        }
+        const cls = classifyPr(head, () => forge.prHasConflicts(pr.number) === "true");
+
+        if (cls === "skip") {
+          log(`PR #${pr.number}: head state unknown -> leaving it untouched this cycle`);
+          await sleepUnlessStopped(POLL_MS, stopNow);
+        } else if (cls === "orphan") {
+          const n = issueNumOf(branch);
+          handleOrphan(pr, {
+            comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
+            label: (l) => forge.prLabel(pr.number, "--add-label", l),
+            close: () => forge.prClose(pr.number),
+            releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
+            log,
+          });
+        } else if (cls === "conflicted") {
           log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
           const outcome = await handleConflict(pr.number, {
             maxFailures: MAX_HEAL,

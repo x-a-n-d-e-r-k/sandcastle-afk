@@ -160,6 +160,10 @@ Now the implementer stops over-building and the reviewer flags over-engineering 
 - It's guidance layered onto the prompt, **not** a hard constraint — the gates (preflight, reviewer, pipeline) still decide what merges, so "write less code" can never bypass correctness, validation, or tests.
 - Empty list (default) = no-op.
 
+## Troubleshooting
+
+- **An issue is `agent-ready` but never gets picked up, and it has a closed agent PR.** A closed `agent/issue-N` PR counts as resolved. If you closed an *orphan* PR by hand (its source branch never reached origin, so the MR has no commit), add the `afk-orphan` label (`labels.orphan`) to that PR, and its issue can be dispatched again. The loop now closes and labels orphans it owns on its own.
+
 ## File map
 
 ```

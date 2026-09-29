@@ -74,6 +74,8 @@ export type Cfg = {
     idea: string;
     needsHuman: string;
     e2eRegression: string;
+    /** Marks a closed PR whose source branch never existed on origin (#61). Default "afk-orphan". */
+    orphan?: string;
   };
   maxHeal: number;
   maxPipelineRetry: number;
@@ -128,6 +130,10 @@ export const assertMaxResume = (v: unknown): void => {
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
 assertMaxResume(cfg.maxResume);
+
+// The orphan label (#61). Optional in config so existing consumers keep working after afk:update.
+export const DEFAULT_ORPHAN_LABEL = "afk-orphan";
+export const ORPHAN_LABEL = cfg.labels.orphan ?? DEFAULT_ORPHAN_LABEL;
 
 // Pure validator for `gitIdentity` (#52). No default on purpose: a silent fallback to the host
 // clone's identity is exactly the drift this exists to stop. Throws naming the key to set.
