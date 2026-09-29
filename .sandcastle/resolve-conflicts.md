@@ -25,8 +25,10 @@ advanced since this branch was created and now conflicts with it.
    criteria and say so in the merge commit.
 3. **Verify no markers remain:** `git diff --check` is clean and `git status` shows
    no unmerged paths.
-4. **Preflight (MUST pass before committing)** — run `bash .sandcastle/preflight.sh`
-   and fix until it exits 0. A merge can break code even with every marker removed.
+4. **Preflight (MUST pass before committing)** — run the preflight commands below
+   and fix until they exit 0. A merge can break code even with every marker removed.
+
+{{PREFLIGHT}}
 5. **Commit the merge** — `git commit` (note any judgment call in the message).
 6. **Push** — `git push`.
 7. Output `<promise>COMPLETE</promise>` and stop. (A fresh review runs automatically.)

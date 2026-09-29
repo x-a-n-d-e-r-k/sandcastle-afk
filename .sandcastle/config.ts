@@ -296,6 +296,17 @@ export const loadAgentRules = (): string => {
   return text ? `# House rules (follow these in addition to the task)\n\n${text}\n` : "";
 };
 
+// The preflight gate, rendered for injection into every code-writing/reviewing prompt (#55).
+// The sandbox worktree holds only TRACKED files, so the generated (gitignored)
+// .sandcastle/preflight.sh never exists in there — the commands must travel in the prompt.
+// One command per line under `set -e`, never joined with ` && `: `a && x || true && b` keeps
+// going after `a` fails. Fails closed on an empty list — an empty block a reviewer could
+// report as "preflight passed" is worse than no run at all.
+export const renderPreflight = (cmds: string[]): string => {
+  if (!cmds?.length) throw new Error("preflight must list at least one command");
+  return ["```bash", "set -e", ...cmds, "```"].join("\n");
+};
+
 // `working` is included so a claimed issue (`working` or any `working:<id>` sub-label) is
 // skipped on fresh pickup — its owning loop resumes it via the claim path, not here.
 export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman, WORKING];

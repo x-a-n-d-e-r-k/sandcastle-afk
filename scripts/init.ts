@@ -82,6 +82,10 @@ const dockerfile = read(".sandcastle/Dockerfile.template")
   .replace(/{{PLATFORM}}/g, C.platform);
 writeFileSync(join(ROOT, ".sandcastle/Dockerfile"), dockerfile);
 console.log("rendered .sandcastle/Dockerfile");
+// Stage forge into the build context (.sandcastle/) so the image bakes it — see the template.
+copyFileSync(join(ROOT, "bin/forge"), join(ROOT, ".sandcastle/forge"));
+chmodSync(join(ROOT, ".sandcastle/forge"), 0o755);
+console.log("staged bin/forge -> .sandcastle/forge (baked into the image)");
 
 // ---- generate preflight.sh -------------------------------------------------
 writeFileSync(join(ROOT, ".sandcastle/preflight.sh"), `#!/usr/bin/env bash\nset -e\n${C.preflight.join("\n")}\n`);
