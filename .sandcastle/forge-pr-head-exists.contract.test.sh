@@ -41,13 +41,20 @@ payload() {
 
 for plat in github gitlab; do
   export FORGE_PLATFORM="$plat"
-  [[ "$(STUB_JSON="$(payload $plat agent/issue-9 "")" f pr-head-exists 5)" == false ]] || fail "[$plat] null/empty sha → false"
+  # #65: a null/empty SHA is forge metadata lag, NOT absence — origin has the branch, so true.
+  [[ "$(STUB_JSON="$(payload $plat agent/issue-7 "")" f pr-head-exists 5)" == true ]] || fail "[$plat] branch on origin + null/empty sha → true (sha must be ignored)"
+  [[ "$(STUB_JSON="$(payload $plat agent/issue-9 "")" f pr-head-exists 5)" == false ]] || fail "[$plat] branch missing + null/empty sha → false"
   [[ "$(STUB_JSON="$(payload $plat agent/issue-7 abc123)" f pr-head-exists 5)" == true ]] || fail "[$plat] sha + branch on origin → true"
   [[ "$(STUB_JSON="$(payload $plat agent/issue-9 abc123)" f pr-head-exists 5)" == false ]] || fail "[$plat] sha but branch missing on origin → false"
 
   set +e; out="$(STUB_FAIL=1 STUB_JSON=x f pr-head-exists 5 2>/dev/null)"; rc=$?; set -e
   [[ $rc -ne 0 ]] || fail "[$plat] API failure must exit non-zero"
   [[ "$out" != false ]] || fail "[$plat] API failure must never print false"
+
+  # a payload with no branch name is an error, not "false"
+  nobranch='{"state":"OPEN"}'; [[ $plat == gitlab ]] && nobranch='{"state":"opened","sha":"abc123"}'
+  set +e; out="$(STUB_JSON="$nobranch" f pr-head-exists 5 2>/dev/null)"; rc=$?; set -e
+  [[ $rc -ne 0 && "$out" != false ]] || fail "[$plat] no branch name must exit non-zero, not print false"
 
   # git failure (origin unreachable) is an error too, not "false"
   git -C "$REPO" remote set-url origin "$TMP/nope.git"
@@ -65,4 +72,4 @@ for plat in github gitlab; do
   [[ ! -s "$TMP/args" ]] || fail "[$plat] closing a closed PR must not call close again"
 done
 
-echo "PASS: pr-head-exists is true/false or an error (never a false negative); pr-close is idempotent — GitHub and GitLab"
+echo "PASS: pr-head-exists asks origin only (payload sha ignored), true/false or an error (never a false negative); pr-close is idempotent — GitHub and GitLab"

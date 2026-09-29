@@ -416,19 +416,19 @@ case "$verb" in
       glab api "projects/$pid/merge_requests/$iid" | jq -r '.has_conflicts // false'
     fi ;;
 
-  pr-head-exists)  # "true"/"false": does the PR/MR's source branch exist on origin with a commit? (#61)
+  pr-head-exists)  # "true"/"false": does the PR/MR's source branch exist on origin? (#61, #65)
     # An orphan (source branch missing) reads as "conflicting" on GitLab, so the loop must ask this
     # first. Absence is not proof: ANY API or git error exits non-zero — never prints "false".
+    # The payload's head SHA is IGNORED on purpose (#65): forge metadata lags (a pushed GitLab MR
+    # can sit at `sha: null` for minutes while "preparing"), and a false "missing" gets a healthy PR
+    # closed and its branch deleted. Only origin is authoritative; the payload supplies the NAME.
     [[ -n "$NUM" ]] || die "pr-head-exists needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      pr_json="$(gh pr view "$NUM" --json headRefName,headRefOid)"
-      head_ref="$(jq -r '.headRefName // ""' <<<"$pr_json")"; head_sha="$(jq -r '.headRefOid // ""' <<<"$pr_json")"
+      head_ref="$(gh pr view "$NUM" --json headRefName | jq -r '.headRefName // ""')"
     else
-      pr_json="$(glab mr view "$NUM" -F json)"
-      head_ref="$(jq -r '.source_branch // ""' <<<"$pr_json")"; head_sha="$(jq -r '.sha // ""' <<<"$pr_json")"
+      head_ref="$(glab mr view "$NUM" -F json | jq -r '.source_branch // ""')"
     fi
     [[ -n "$head_ref" ]] || die "pr-head-exists: no source branch name in the PR/MR payload"
-    if [[ -z "$head_sha" ]]; then echo false; exit 0; fi
     remote_line="$(git ls-remote --heads origin "refs/heads/$head_ref")" || die "pr-head-exists: git ls-remote failed"
     if [[ -n "$remote_line" ]]; then echo true; else echo false; fi ;;
 
