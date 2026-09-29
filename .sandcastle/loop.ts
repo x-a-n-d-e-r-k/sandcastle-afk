@@ -1,12 +1,13 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
+import { handleConflict, mechanicalMerge, baseTip, branchContains } from "./conflicts.js";
 
 const RULES = loadAgentRules();
 // The preflight gate travels in the prompt, not as a file: the gitignored .sandcastle/preflight.sh
@@ -239,20 +240,38 @@ async function main(): Promise<void> {
         const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
 
         // Conflicts with the base branch block BOTH review and merge, so resolve them
-        // first. A sandbox pass merges the base branch in and fixes the markers; capped
-        // like heal so a conflict the agent can't resolve escalates to a human instead
-        // of wedging the loop (the failure mode that needs manual rescue otherwise). A
-        // conflicted PR can't be reviewed or merged, so skip the rest of this cycle.
+        // first (#54): a host-side `git merge` honours .gitattributes merge drivers the forge's
+        // mergeability check ignores, so try it before spending an agent run; only a real
+        // conflict goes to the sandbox resolver. Capped at MAX_HEAL CONSECUTIVE failures (any
+        // success resets it) so an unresolvable conflict escalates instead of wedging the loop,
+        // while a PR that main keeps moving under is never parked for succeeding. A conflicted
+        // PR can't be reviewed or merged, so skip the rest of this cycle.
         if (forge.prHasConflicts(pr.number) === "true") {
-          const tries = Number(forge.prConflictRetryCount(pr.number)) || 0;
-          if (tries >= MAX_HEAL) {
-            log(`PR #${pr.number} conflict-resolve cap (${tries}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
-            escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} attempts`);
-          } else {
-            log(`PR #${pr.number} conflicts with ${cfg.defaultBranch} -> resolve ${tries + 1}/${MAX_HEAL}`);
-            forge.prConflictRetryMark(pr.number);
-            syncBranch(branch);
-            await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+          log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
+          const outcome = await handleConflict(pr.number, {
+            maxFailures: MAX_HEAL,
+            failures: () => Number(forge.prConflictRetryCount(pr.number)) || 0,
+            markAttempt: () => forge.prConflictRetryMark(pr.number),
+            markResolved: () => forge.prConflictRetryClear(pr.number),
+            mechanical: () => mechanicalMerge({
+              repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
+            }),
+            agent: async () => {
+              const sha = baseTip(ROOT, cfg.defaultBranch);
+              syncBranch(branch);
+              await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+              return branchContains(ROOT, branch, sha);
+            },
+            escalate: (n) => {
+              log(`PR #${pr.number} conflict-resolve cap (${n}/${MAX_HEAL} consecutive) -> escalating to ${L.needsHuman}`);
+              escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} consecutive attempts`);
+            },
+            log,
+          });
+          // A new head needs a fresh review — except, if the consumer opts out, one that only
+          // merged the base branch in mechanically. A failed agent resolve is retried next cycle.
+          const rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
+          if (rereview) {
             syncBranch(branch);
             if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
             else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }

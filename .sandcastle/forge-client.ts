@@ -137,6 +137,10 @@ export const prConflictRetryMark = (num: number, ...rest: Arg[]): void => {
   forge(`pr-conflict-retry-mark ${[num, ...rest].join(" ")}`.trim());
 };
 
+export const prConflictRetryClear = (num: number, ...rest: Arg[]): void => {
+  forge(`pr-conflict-retry-clear ${[num, ...rest].join(" ")}`.trim());
+};
+
 export const gitSetup = (...rest: Arg[]): void => {
   forge(`git-setup ${rest.join(" ")}`.trim());
 };

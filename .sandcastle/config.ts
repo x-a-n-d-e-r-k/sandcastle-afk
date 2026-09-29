@@ -98,6 +98,12 @@ export type Cfg = {
    * phase, so commits on one PR end up with different authors.
    */
   gitIdentity: GitIdentity;
+  /**
+   * Re-review a PR after the loop merged the base branch into it mechanically — no agent, only
+   * .gitattributes merge drivers (#54). Default true (today's behaviour: every new head is
+   * re-reviewed). Set false to let a mechanical base-merge keep its existing review state.
+   */
+  rereviewAfterMechanicalMerge?: boolean;
 };
 
 export type GitIdentity = { name: string; email: string };
@@ -118,7 +124,8 @@ export const requireGitIdentity = (id: Partial<GitIdentity> | undefined): GitIde
   return { name, email };
 };
 
-const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+// Single-quote a value for a POSIX shell command line.
+export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // The sandbox hook that sets push credentials AND pins the commit identity. It runs after
 // upstream copies the host clone's identity in, so it wins.

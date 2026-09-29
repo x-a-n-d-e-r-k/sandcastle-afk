@@ -30,6 +30,7 @@
   "pr-has-conflicts":         { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
   "pr-conflict-retry-count":  { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
   "pr-conflict-retry-mark":   { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
+  "pr-conflict-retry-clear":  { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
 
   "git-setup":                { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": [] }
 }
