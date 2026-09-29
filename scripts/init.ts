@@ -42,7 +42,7 @@ const cfg = {
   gitIdentity: { name: "", email: "" },
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
   labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression" },
-  maxHeal: 3, maxPipelineRetry: 2, flakyJobs: [] as string[],
+  maxHeal: 3, maxPipelineRetry: 2, maxResume: 2, flakyJobs: [] as string[],
   priorityLabels: ["highest", "high", "low", "lowest"],
   agentRules: [] as string[],
   pollMinutes: 5, idleTimeoutSeconds: 900,
