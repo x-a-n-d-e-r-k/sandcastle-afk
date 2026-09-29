@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, renderPreflight } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, renderPreflight, requireGitIdentity, gitSetupCommand } from "./config.js";
 import * as forge from "./forge-client.js";
 import { implementUiBlock } from "./ui.js";
 
@@ -20,7 +20,7 @@ export const mainImplementOpts = (issue: number): RunOptions => ({
   },
   branchStrategy: { type: "branch", branch: `agent/issue-${issue}`, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
-  hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: "forge git-setup" }] } },
+  hooks: { sandbox: { onSandboxReady: [{ command: cfg.install, timeoutMs: 600_000 }, { command: gitSetupCommand(requireGitIdentity(cfg.gitIdentity)) }] } },
   logging: { type: "stdout" },
   idleTimeoutSeconds: cfg.idleTimeoutSeconds,
 });

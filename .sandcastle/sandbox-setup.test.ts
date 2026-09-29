@@ -12,24 +12,26 @@ if (!existsSync(join(ROOT, "afk.config.json")))
 
 const { sandboxReadyHooks } = await import("./loop.js");
 const cmds = (hooks: { command: string }[]) => hooks.map((h) => h.command);
+const ID = { name: "dev-bot", email: "dev@bot.test" };
+const GIT_SETUP = "forge git-setup --git-name 'dev-bot' --git-email 'dev@bot.test'";
 
 test("setupCommands run AFTER install and BEFORE forge git-setup", () => {
-  const hooks = sandboxReadyHooks("npm ci", ["provision-a", "provision-b"], true);
-  assert.deepEqual(cmds(hooks), ["npm ci", "provision-a", "provision-b", "forge git-setup"]);
+  const hooks = sandboxReadyHooks("npm ci", ["provision-a", "provision-b"], ID);
+  assert.deepEqual(cmds(hooks), ["npm ci", "provision-a", "provision-b", GIT_SETUP]);
 });
 
 test("no setupCommands → sequence is unchanged (install [+ git-setup])", () => {
-  assert.deepEqual(cmds(sandboxReadyHooks("npm ci", [], true)), ["npm ci", "forge git-setup"]);
-  assert.deepEqual(cmds(sandboxReadyHooks("npm ci", [], false)), ["npm ci"]);
+  assert.deepEqual(cmds(sandboxReadyHooks("npm ci", [], ID)), ["npm ci", GIT_SETUP]);
+  assert.deepEqual(cmds(sandboxReadyHooks("npm ci", [], null)), ["npm ci"]);
 });
 
 test("a non-pushing phase (review/triage) still runs setupCommands but not git-setup", () => {
-  const hooks = sandboxReadyHooks("npm ci", ["provision"], false);
+  const hooks = sandboxReadyHooks("npm ci", ["provision"], null);
   assert.deepEqual(cmds(hooks), ["npm ci", "provision"]);
 });
 
 test("each setup command carries a timeout, like install", () => {
-  const hooks = sandboxReadyHooks("npm ci", ["provision"], false);
+  const hooks = sandboxReadyHooks("npm ci", ["provision"], null);
   for (const h of hooks) assert.equal(typeof (h as { timeoutMs?: number }).timeoutMs, "number");
 });
 

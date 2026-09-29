@@ -14,6 +14,10 @@
   ],
   "e2e": "",
   "imageName": "sandcastle-afk",
+  "gitIdentity": {
+    "name": "my-dev-bot",
+    "email": "my-dev-bot@users.noreply.github.com"
+  },
   "models": {
     "implement": "claude-sonnet-4-6",
     "review": "claude-opus-4-8",
