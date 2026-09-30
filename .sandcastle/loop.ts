@@ -9,7 +9,7 @@ import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped }
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healWithBudget, type HealDeps } from "./heal.js";
-import { closeLinkedIssue, guardedMerge, landedOnBase, type IssueCloseDeps } from "./merge-guard.js";
+import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
 const RULES = loadAgentRules();
@@ -237,6 +237,8 @@ async function main(): Promise<void> {
   checkReviewCredential();
   // Same for the commit identity (#52): refuse to start rather than fail every pushing cycle.
   requireGitIdentity(cfg.gitIdentity);
+  // The merge guard's landed check needs git >= 2.38; refuse to start rather than never merge.
+  assertGitSupportsMergeTree(sh("git --version"));
   let lastTriageAt: number | null = null;
   log(`AFK loop starting (concurrency 1, platform ${cfg.platform}, review ${cfg.reviewMode}${DRY ? ", DRY-RUN" : ""}). \`pnpm afk:stop\` stops after the current run; Ctrl-C stops sooner (again to force).`);
 

@@ -222,12 +222,14 @@ case "$verb" in
       # project with no approval rule never auto-merges unreviewed.
       # `closed` must include MERGED MRs, as GitHub's does (#70): GitLab keeps merged in its own
       # state, so `--closed` alone hides them and the loop re-dispatches work that already shipped.
+      # --per-page 100 matches gh's --limit 100: glab's default page is 30, so an older merged MR would
+      # otherwise drop out of the list on a busy project.
       gl_list() {
         case "$state" in
-          closed) { glab mr list --closed -F json; glab mr list --merged -F json; } | jq -s 'add | unique_by(.iid)' ;;
-          merged) glab mr list --merged -F json ;;
-          all) glab mr list --all -F json ;;
-          *) glab mr list -F json ;;
+          closed) { glab mr list --closed --per-page 100 -F json; glab mr list --merged --per-page 100 -F json; } | jq -s 'add | unique_by(.iid)' ;;
+          merged) glab mr list --merged --per-page 100 -F json ;;
+          all) glab mr list --all --per-page 100 -F json ;;
+          *) glab mr list --per-page 100 -F json ;;
         esac
       }
       gl_list | jq -c '.[]' | while read -r mr; do
