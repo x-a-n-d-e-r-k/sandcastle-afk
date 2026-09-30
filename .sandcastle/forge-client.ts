@@ -144,6 +144,10 @@ export const prConflictRetryMark = (num: number, ...rest: Arg[]): void => {
   forge(`pr-conflict-retry-mark ${[num, ...rest].join(" ")}`.trim());
 };
 
+export const prRecheckMergeability = (num: number, ...rest: Arg[]): void => {
+  forge(`pr-recheck-mergeability ${[num, ...rest].join(" ")}`.trim());
+};
+
 export const prConflictRetryClear = (num: number, ...rest: Arg[]): void => {
   forge(`pr-conflict-retry-clear ${[num, ...rest].join(" ")}`.trim());
 };

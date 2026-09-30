@@ -64,6 +64,11 @@ export const branchContains = (repo: string, branch: string, sha: string, run: R
 
 export type ConflictDeps = {
   maxFailures: number;
+  /**
+   * Does the PR branch already contain the current base tip (#68)? Then the forge's conflict flag
+   * is stale — there is nothing to resolve. Throws on a git error (→ treated as "can't tell").
+   */
+  alreadyContainsBase: () => boolean;
   /** Consecutive failed resolutions since the last success (forge pr-conflict-retry-count). */
   failures: () => number;
   markAttempt: () => void;
@@ -75,9 +80,22 @@ export type ConflictDeps = {
   log: (m: string) => void;
 };
 
-export type ConflictResult = "escalated" | "mechanical" | "agent-resolved" | "agent-failed";
+export type ConflictResult = "stale-flag" | "escalated" | "mechanical" | "agent-resolved" | "agent-failed";
 
 export async function handleConflict(pr: number, d: ConflictDeps): Promise<ConflictResult> {
+  // A stale forge flag (#68): the branch already contains base, so it cannot conflict with it.
+  // "Resolving" it merges nothing, pushes nothing, leaves the flag stale — and every such
+  // "success" reset the failure count, so it looped forever, re-reviewing an unchanged head and
+  // starving every other PR. Touch nothing; the caller asks the forge to recompute. Fail closed:
+  // if the check itself errors, fall through to today's path — never skip a real conflict.
+  let stale = false;
+  try { stale = d.alreadyContainsBase(); }
+  catch (e) { d.log(`stale-flag check for #${pr} errored (${(e as Error).message.split("\n")[0]}) — resolving as usual`); }
+  if (stale) {
+    d.log(`#${pr} is flagged conflicting but already contains the base tip — stale forge flag, not resolving`);
+    return "stale-flag";
+  }
+
   const fails = d.failures();
   if (fails >= d.maxFailures) { d.escalate(fails); return "escalated"; }
 
