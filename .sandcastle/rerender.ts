@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createSandbox, type SandboxHooks } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sh, shq, type GitIdentity } from "./config.js";
-import { artifactPrefix, renderInputsPrefix, type UiGate, type UiCfg } from "./ui.js";
+import { artifactPrefix, renderInputsPrefix, uiFilesTouched, type UiGate, type UiCfg } from "./ui.js";
 
 // ---------------------------------------------------------------------------
 // Re-render instead of parking (#67).
@@ -84,7 +84,17 @@ export async function rerenderBeforeEscalating(pr: number, gate: Blocked, d: Rer
 
 export const DEFAULT_RENDER_TIMEOUT_SECONDS = 900;
 export const renderCommand = (ui: UiCfg): string =>
-  `timeout ${ui.renderTimeoutSeconds ?? DEFAULT_RENDER_TIMEOUT_SECONDS}s sh -c ${shq(ui.renderCmd)}`;
+  // -k: a render that ignores SIGTERM (a stuck browser) gets SIGKILLed 30s later.
+  `timeout -k 30s ${ui.renderTimeoutSeconds ?? DEFAULT_RENDER_TIMEOUT_SECONDS}s sh -c ${shq(ui.renderCmd)}`;
+
+// The PR's UI files at a commit: its diff against the base, filtered to verifyGlobs. Taking the
+// union at the rendered head AND the current head matters: a heal that reverts a UI file to base
+// drops it from the current diff, yet the PR's UI did change since the render.
+export const prUiFilesAt = (o: { repo: string; base: string; sha: string; globs: string[]; run?: Run }): string[] => {
+  const run = o.run ?? sh;
+  const changed = run(`git diff --name-only origin/${o.base}...${o.sha}`, o.repo).split("\n").map((s) => s.trim()).filter(Boolean);
+  return uiFilesTouched(changed, o.globs);
+};
 
 // Are the PR's UI files byte-identical at two commits? Any unresolvable path (added/removed
 // since, or a commit that isn't present) counts as changed — the conservative answer.
@@ -128,7 +138,7 @@ export const publishArtifacts = (o: {
     try { run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp); }
     catch {
       // Another loop/agent published to the artifact branch at the same moment: rebase once, retry.
-      run(`git pull -q --rebase origin ${shq(o.artifactBranch)}`, tmp);
+      run(`git ${as} pull -q --rebase origin ${shq(o.artifactBranch)}`, tmp); // rebase re-commits: needs the identity
       run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp);
     }
     return files.length;

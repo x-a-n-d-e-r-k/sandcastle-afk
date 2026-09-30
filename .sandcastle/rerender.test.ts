@@ -14,7 +14,7 @@ if (!existsSync(join(ROOT, "afk.config.json")))
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
-const { rerenderBeforeEscalating, publishArtifacts, uiFilesUnchanged, renderCommand } = await import("./rerender.js");
+const { rerenderBeforeEscalating, publishArtifacts, uiFilesUnchanged, renderCommand, prUiFilesAt } = await import("./rerender.js");
 const { implementUiBlock, renderedHeads, persistedRenderInputs, uiGate } = await import("./ui.js");
 type Deps = Parameters<typeof rerenderBeforeEscalating>[2];
 type Blocked = Parameters<typeof rerenderBeforeEscalating>[1];
@@ -203,9 +203,9 @@ test("uiFilesUnchanged (real git): base merge only → true; PR edits its UI fil
 });
 
 test("the re-render command is bounded by coreutils timeout (default 900s, configurable), renderCmd shell-quoted", () => {
-  assert.equal(renderCommand({ verifyGlobs: [], renderCmd: "pnpm ui:render", artifactDir: "x" }), "timeout 900s sh -c 'pnpm ui:render'");
+  assert.equal(renderCommand({ verifyGlobs: [], renderCmd: "pnpm ui:render", artifactDir: "x" }), "timeout -k 30s 900s sh -c 'pnpm ui:render'");
   const quoted = renderCommand({ verifyGlobs: [], renderCmd: "echo \"it's ok\"", artifactDir: "x", renderTimeoutSeconds: 60 });
-  assert.ok(quoted.startsWith("timeout 60s sh -c "));
+  assert.ok(quoted.startsWith("timeout -k 30s 60s sh -c "));
   let hasTimeout = true;
   try { execSync("command -v timeout", { stdio: "ignore" }); } catch { hasTimeout = false; }
   if (!hasTimeout) return; // the sandbox image (Debian) has coreutils; some dev hosts don't
@@ -233,5 +233,25 @@ test("publishArtifacts retries once after a concurrent publish moved the artifac
     publishArtifacts({ repo: fx.host, artifactBranch: "afk/artifacts", pr: 1, sha: NEW, srcDir: src, identity: { name: "b", email: "b@b" }, run: racing });
     assert.equal(git(fx.origin, `show afk/artifacts:pr-1/${NEW}/a.png`), "png", "our publish landed");
     assert.equal(git(fx.origin, `show afk/artifacts:pr-2/${NEW}/b.png`), "png", "the racing publish survived");
+  } finally { fx.cleanup(); }
+});
+
+test("#19 bound, heal that REVERTS a UI file: the union of UI files at render and now catches it", () => {
+  const fx = repo();
+  try {
+    const w = join(fx.dir, "w"); git(fx.dir, `clone -q ${fx.origin} ${w}`);
+    mkdirSync(join(w, "apps")); writeFileSync(join(w, "apps", "A.tsx"), "base-a"); writeFileSync(join(w, "apps", "B.tsx"), "base-b");
+    git(w, "add -A"); git(w, "commit -q -m base"); git(w, "push -q origin HEAD:main"); git(w, "fetch -q origin");
+    git(w, "checkout -q -b agent/issue-1");
+    writeFileSync(join(w, "apps", "A.tsx"), "pr-a"); writeFileSync(join(w, "apps", "B.tsx"), "pr-b"); git(w, "commit -qam pr");
+    const rendered = git(w, "rev-parse HEAD");
+    writeFileSync(join(w, "apps", "B.tsx"), "base-b"); git(w, "commit -qam 'heal: revert B'");
+    const head = git(w, "rev-parse HEAD");
+    const globs = ["apps/**"];
+    const now = prUiFilesAt({ repo: w, base: "main", sha: head, globs });
+    assert.deepEqual(now, ["apps/A.tsx"], "the reverted file is no longer in the current UI diff");
+    assert.equal(uiFilesUnchanged({ repo: w, files: now, a: rendered, b: head }), true, "current-diff-only would wrongly say unchanged");
+    const union = [...new Set([...now, ...prUiFilesAt({ repo: w, base: "main", sha: rendered, globs })])];
+    assert.equal(uiFilesUnchanged({ repo: w, files: union, a: rendered, b: head }), false, "the union sees B changed");
   } finally { fx.cleanup(); }
 });

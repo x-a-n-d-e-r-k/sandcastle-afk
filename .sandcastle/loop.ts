@@ -7,7 +7,7 @@ import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
-import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged } from "./rerender.js";
+import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
@@ -399,7 +399,10 @@ async function main(): Promise<void> {
                 const rr = await rerenderBeforeEscalating(pr.number, vg, {
                   head,
                   renderedHeads: () => renderedHeads(pr.number, ab),
-                  uiUnchangedSince: (sha) => uiFilesUnchanged({ repo: ROOT, files: uiFiles, a: sha, b: head }),
+                  uiUnchangedSince: (sha) => uiFilesUnchanged({
+                    repo: ROOT, a: sha, b: head,
+                    files: [...new Set([...uiFiles, ...prUiFilesAt({ repo: ROOT, base: cfg.defaultBranch, sha, globs: ui.verifyGlobs })])],
+                  }),
                   inputsConfigured: !!ui.renderInputs?.length,
                   persistedInputs: () => persistedRenderInputs(pr.number, ab),
                   renderAndPublish: () => liveRenderAndPublish({
