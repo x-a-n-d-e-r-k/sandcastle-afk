@@ -453,6 +453,16 @@ case "$verb" in
       glab mr close "$NUM"
     fi ;;
 
+  pr-recheck-mergeability)  # ask the forge to recompute a PR's mergeability; exits 0 when done (#68)
+    # A stale "conflicting" flag (the branch already contains base) doesn't clear on its own on a
+    # degraded GitLab; a rebase request — a no-op when already up to date — forces a recompute.
+    # GitHub recomputes lazily on read: nothing to do.
+    [[ -n "$NUM" ]] || die "pr-recheck-mergeability needs <number>"
+    if [[ "$PLATFORM" == gitlab ]]; then
+      mr="$(glab mr view "$NUM" -F json)"
+      glab api -X PUT "projects/$(jq -r '.project_id' <<<"$mr")/merge_requests/$(jq -r '.iid' <<<"$mr")/rebase" >/dev/null
+    fi ;;
+
   pr-conflict-retry-count)  # CONSECUTIVE failed conflict resolutions: [forge:conflict-retry] markers after the last [forge:conflict-resolved] (#54)
     [[ -n "$NUM" ]] || die "pr-conflict-retry-count needs <number>"
     # A lifetime total parks a healthy PR the Nth time main moves under it, even when every

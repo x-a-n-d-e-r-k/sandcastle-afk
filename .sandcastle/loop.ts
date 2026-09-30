@@ -7,7 +7,7 @@ import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
-import { handleConflict, mechanicalMerge, baseTip, branchContains } from "./conflicts.js";
+import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
@@ -190,6 +190,11 @@ const issueCloseDeps: IssueCloseDeps = {
   log,
 };
 
+// After a conflict outcome: a stale flag moves on to the next PR in the same cycle (#68);
+// everything else is this cycle's work.
+export const afterConflict = (o: ConflictResult): "next-pr" | "end-cycle" =>
+  o === "stale-flag" ? "next-pr" : "end-cycle";
+
 function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
   forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
@@ -276,158 +281,180 @@ async function main(): Promise<void> {
       }
 
       if (active.length) {
-        const pr = active[0];
-        const branch = pr.headRef;
-        const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
+        // Drive the first PR that needs work. Most outcomes end the cycle (concurrency 1: one
+        // container run at a time); a stale conflict flag yields to the NEXT PR instead, so one
+        // stuck flag can't starve every other PR (#68).
+        let yielded = 0;
+        prs: for (const pr of active) {
+          const branch = pr.headRef;
+          const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
 
-        // Conflicts with the base branch block BOTH review and merge, so resolve them
-        // first (#54): a host-side `git merge` honours .gitattributes merge drivers the forge's
-        // mergeability check ignores, so try it before spending an agent run; only a real
-        // conflict goes to the sandbox resolver. Capped at MAX_HEAL CONSECUTIVE failures (any
-        // success resets it) so an unresolvable conflict escalates instead of wedging the loop,
-        // while a PR that main keeps moving under is never parked for succeeding. A conflicted
-        // PR can't be reviewed or merged, so skip the rest of this cycle.
-        let head: boolean | "error";
-        try {
-          const out = forge.prHeadExists(pr.number);
-          head = out === "true" ? true : out === "false" ? false : "error";
-          if (head === "error") log(`PR #${pr.number}: pr-head-exists gave unexpected output "${out}"`);
-        } catch (e) {
-          log(`PR #${pr.number}: could not verify its source branch (${(e as Error).message.split("\n")[0]})`);
-          head = "error";
-        }
-        const cls = classifyPr(head, () => forge.prHasConflicts(pr.number) === "true");
-
-        if (cls === "skip") {
-          log(`PR #${pr.number}: head state unknown -> leaving it untouched this cycle`);
-          await sleepUnlessStopped(POLL_MS, stopNow);
-        } else if (cls === "orphan") {
-          const n = issueNumOf(branch);
-          handleOrphan(pr, {
-            comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
-            label: (l) => forge.prLabel(pr.number, "--add-label", l),
-            close: () => forge.prClose(pr.number),
-            releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
-            log,
-          });
-        } else if (cls === "conflicted") {
-          log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
-          const outcome = await handleConflict(pr.number, {
-            maxFailures: MAX_HEAL,
-            failures: () => Number(forge.prConflictRetryCount(pr.number)) || 0,
-            markAttempt: () => forge.prConflictRetryMark(pr.number),
-            markResolved: () => forge.prConflictRetryClear(pr.number),
-            mechanical: () => mechanicalMerge({
-              repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
-            }),
-            agent: async () => {
-              const sha = baseTip(ROOT, cfg.defaultBranch);
-              syncBranch(branch);
-              await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
-              return branchContains(ROOT, branch, sha);
-            },
-            escalate: (n) => {
-              log(`PR #${pr.number} conflict-resolve cap (${n}/${MAX_HEAL} consecutive) -> escalating to ${L.needsHuman}`);
-              escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} consecutive attempts`);
-            },
-            log,
-          });
-          // A new head needs a fresh review — except, if the consumer opts out, one that only
-          // merged the base branch in mechanically. A failed agent resolve is retried next cycle.
-          const rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
-          if (rereview) {
-            syncBranch(branch);
-            if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
-            else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+          // Conflicts with the base branch block BOTH review and merge, so resolve them
+          // first (#54): a host-side `git merge` honours .gitattributes merge drivers the forge's
+          // mergeability check ignores, so try it before spending an agent run; only a real
+          // conflict goes to the sandbox resolver. Capped at MAX_HEAL CONSECUTIVE failures (any
+          // success resets it) so an unresolvable conflict escalates instead of wedging the loop,
+          // while a PR that main keeps moving under is never parked for succeeding. A conflicted
+          // PR can't be reviewed or merged, so it is this cycle's work — unless the flag is stale (#68),
+          // in which case the cycle moves on to the next PR.
+          let head: boolean | "error";
+          try {
+            const out = forge.prHeadExists(pr.number);
+            head = out === "true" ? true : out === "false" ? false : "error";
+            if (head === "error") log(`PR #${pr.number}: pr-head-exists gave unexpected output "${out}"`);
+          } catch (e) {
+            log(`PR #${pr.number}: could not verify its source branch (${(e as Error).message.split("\n")[0]})`);
+            head = "error";
           }
-        } else if (pr.reviewState === "APPROVED") {
-          if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleepUnlessStopped(POLL_MS, stopNow); }
-          else {
-            // Visual gate (#19). An approval + green pipeline does NOT prove a UI change
-            // renders; both agents can honestly believe a broken layout is fine. If the diff
-            // touches ui.verifyGlobs and no screenshots were published, refuse to merge and
-            // hand it to a human — the prompts ask for the render, this is what enforces it.
-            // No-op for consumers without `ui` configured, and for non-UI diffs.
-            //
-            // syncBranch first so origin/<head> exists before uiGate diffs against it: this is
-            // the one path that can reach APPROVED without the review path having synced (e.g.
-            // a human approves within the poll interval), and uiGate's diff would otherwise
-            // throw on a missing ref and livelock the cycle.
-            if (cfg.ui) syncBranch(branch);
-            const vg = uiGate(pr.number, branch, cfg.ui);
-            if (vg.required && vg.blocked) {
-              log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);
-              escalate(pr.number, vg.reason);
-              await sleepUnlessStopped(POLL_MS, stopNow);
-              continue;
+          const cls = classifyPr(head, () => forge.prHasConflicts(pr.number) === "true");
+
+          if (cls === "skip") {
+            log(`PR #${pr.number}: head state unknown -> leaving it untouched this cycle`);
+            await sleepUnlessStopped(POLL_MS, stopNow);
+          } else if (cls === "orphan") {
+            const n = issueNumOf(branch);
+            handleOrphan(pr, {
+              comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
+              label: (l) => forge.prLabel(pr.number, "--add-label", l),
+              close: () => forge.prClose(pr.number),
+              releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
+              log,
+            });
+          } else if (cls === "conflicted") {
+            log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
+            const outcome = await handleConflict(pr.number, {
+              maxFailures: MAX_HEAL,
+              alreadyContainsBase: () => branchContains(ROOT, branch, baseTip(ROOT, cfg.defaultBranch)),
+              failures: () => Number(forge.prConflictRetryCount(pr.number)) || 0,
+              markAttempt: () => forge.prConflictRetryMark(pr.number),
+              markResolved: () => forge.prConflictRetryClear(pr.number),
+              mechanical: () => mechanicalMerge({
+                repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
+              }),
+              agent: async () => {
+                const sha = baseTip(ROOT, cfg.defaultBranch);
+                syncBranch(branch);
+                await runGuarded(resolveConflictsOpts(pr.number, branch, issue));
+                return branchContains(ROOT, branch, sha);
+              },
+              escalate: (n) => {
+                log(`PR #${pr.number} conflict-resolve cap (${n}/${MAX_HEAL} consecutive) -> escalating to ${L.needsHuman}`);
+                escalate(pr.number, `could not resolve conflicts with ${cfg.defaultBranch} after ${MAX_HEAL} consecutive attempts`);
+              },
+              log,
+            });
+            if (afterConflict(outcome) === "next-pr") {
+              // The head didn't change, so no re-review. Nudge the forge to recompute mergeability
+              // (GitLab: a no-op rebase), then move on to the next PR in this same cycle.
+              try { forge.prRecheckMergeability(pr.number); }
+              catch (e) { log(`PR #${pr.number}: mergeability recheck failed (${(e as Error).message.split("\n")[0]})`); }
+              yielded++;
+              continue prs;
             }
-            const pl = forge.prPipeline(pr.number);
-            if (["success", "skipped", "none"].includes(pl.status)) {
-              log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
-              // Guarded (#71): never merge a change already on base; verify the merge finalized.
-              const landed = () => landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh });
-              const outcome = guardedMerge(pr.number, {
-                landed,
-                merge: () => forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge"),
-                stillOpen: () => forge.prList().some((p) => p.number === pr.number),
-                finalize: (why) => {
-                  const body = why === "already-landed"
-                    ? `AFK: this change is already on ${cfg.defaultBranch} — closing instead of merging it again.`
-                    : `AFK: the merge landed on ${cfg.defaultBranch} but the forge did not finalize this PR — closing it so it is not merged again.`;
-                  forge.prComment(pr.number, "--body", JSON.stringify(body));
-                  forge.prClose(pr.number);
-                },
-                closeIssue: () => { if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps); },
-                log,
-              });
-              if (outcome === "skipped-error" || outcome === "merge-pending") await sleepUnlessStopped(POLL_MS, stopNow);
-            } else if (["running", "pending"].includes(pl.status)) {
-              log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
-              await sleepUnlessStopped(POLL_MS, stopNow);
-            } else {
-              // failed | canceled — retry flakes, else heal against the pipeline logs
-              const tries = Number(forge.prPipelineRetryCount(pr.number)) || 0;
-              const failedJobs = forge.prPipelineFailedJobs(pr.number).split("\n").map((s) => s.trim()).filter(Boolean);
-              const onlyFlaky = cfg.flakyJobs.length ? failedJobs.every((j) => cfg.flakyJobs.includes(j)) : true;
-              if (onlyFlaky && tries < cfg.maxPipelineRetry) {
-                log(`PR #${pr.number} pipeline ${pl.status} — flake retry ${tries + 1}/${cfg.maxPipelineRetry} [${failedJobs.join(", ") || "?"}]`);
-                forge.prPipelineRetryMark(pr.number);
-                forge.prPipelineRetry(pr.number);
+            // A new head needs a fresh review — except, if the consumer opts out, one that only
+            // merged the base branch in mechanically. A failed agent resolve is retried next cycle.
+            const rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
+            if (rereview) {
+              syncBranch(branch);
+              if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
+              else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+            }
+          } else if (pr.reviewState === "APPROVED") {
+            if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleepUnlessStopped(POLL_MS, stopNow); }
+            else {
+              // Visual gate (#19). An approval + green pipeline does NOT prove a UI change
+              // renders; both agents can honestly believe a broken layout is fine. If the diff
+              // touches ui.verifyGlobs and no screenshots were published, refuse to merge and
+              // hand it to a human — the prompts ask for the render, this is what enforces it.
+              // No-op for consumers without `ui` configured, and for non-UI diffs.
+              //
+              // syncBranch first so origin/<head> exists before uiGate diffs against it: this is
+              // the one path that can reach APPROVED without the review path having synced (e.g.
+              // a human approves within the poll interval), and uiGate's diff would otherwise
+              // throw on a missing ref and livelock the cycle.
+              if (cfg.ui) syncBranch(branch);
+              const vg = uiGate(pr.number, branch, cfg.ui);
+              if (vg.required && vg.blocked) {
+                log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);
+                escalate(pr.number, vg.reason);
+                await sleepUnlessStopped(POLL_MS, stopNow);
+                break prs;
+              }
+              const pl = forge.prPipeline(pr.number);
+              if (["success", "skipped", "none"].includes(pl.status)) {
+                log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
+                // Guarded (#71): never merge a change already on base; verify the merge finalized.
+                const landed = () => landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh });
+                const outcome = guardedMerge(pr.number, {
+                  landed,
+                  merge: () => forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge"),
+                  stillOpen: () => forge.prList().some((p) => p.number === pr.number),
+                  finalize: (why) => {
+                    const body = why === "already-landed"
+                      ? `AFK: this change is already on ${cfg.defaultBranch} — closing instead of merging it again.`
+                      : `AFK: the merge landed on ${cfg.defaultBranch} but the forge did not finalize this PR — closing it so it is not merged again.`;
+                    forge.prComment(pr.number, "--body", JSON.stringify(body));
+                    forge.prClose(pr.number);
+                  },
+                  closeIssue: () => { if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps); },
+                  log,
+                });
+                if (outcome === "skipped-error" || outcome === "merge-pending") await sleepUnlessStopped(POLL_MS, stopNow);
+              } else if (["running", "pending"].includes(pl.status)) {
+                log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
                 await sleepUnlessStopped(POLL_MS, stopNow);
               } else {
-                const heals = Number(forge.prChangesCount(pr.number)) || 0;
-                if (heals >= MAX_HEAL) {
-                  log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating`);
-                  escalate(pr.number);
+                // failed | canceled — retry flakes, else heal against the pipeline logs
+                const tries = Number(forge.prPipelineRetryCount(pr.number)) || 0;
+                const failedJobs = forge.prPipelineFailedJobs(pr.number).split("\n").map((s) => s.trim()).filter(Boolean);
+                const onlyFlaky = cfg.flakyJobs.length ? failedJobs.every((j) => cfg.flakyJobs.includes(j)) : true;
+                if (onlyFlaky && tries < cfg.maxPipelineRetry) {
+                  log(`PR #${pr.number} pipeline ${pl.status} — flake retry ${tries + 1}/${cfg.maxPipelineRetry} [${failedJobs.join(", ") || "?"}]`);
+                  forge.prPipelineRetryMark(pr.number);
+                  forge.prPipelineRetry(pr.number);
+                  await sleepUnlessStopped(POLL_MS, stopNow);
                 } else {
-                  log(`PR #${pr.number} pipeline failing after retries -> heal ${heals + 1}/${MAX_HEAL}`);
-                  syncBranch(branch);
-                  await runGuarded(healOpts(pr.number, branch, issue));
-                  forge.prClearChanges(pr.number);
-                  syncBranch(branch);
-                  log(`re-reviewing #${pr.number}`);
-                  await runGuarded(reviewOpts(pr.number, branch, issue));
+                  const heals = Number(forge.prChangesCount(pr.number)) || 0;
+                  if (heals >= MAX_HEAL) {
+                    log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating`);
+                    escalate(pr.number);
+                  } else {
+                    log(`PR #${pr.number} pipeline failing after retries -> heal ${heals + 1}/${MAX_HEAL}`);
+                    syncBranch(branch);
+                    await runGuarded(healOpts(pr.number, branch, issue));
+                    forge.prClearChanges(pr.number);
+                    syncBranch(branch);
+                    log(`re-reviewing #${pr.number}`);
+                    await runGuarded(reviewOpts(pr.number, branch, issue));
+                  }
                 }
               }
             }
-          }
-        } else if (pr.reviewState === "CHANGES_REQUESTED") {
-          const heals = Number(forge.prChangesCount(pr.number)) || 0;
-          if (heals >= MAX_HEAL) {
-            log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
-            escalate(pr.number);
+          } else if (pr.reviewState === "CHANGES_REQUESTED") {
+            const heals = Number(forge.prChangesCount(pr.number)) || 0;
+            if (heals >= MAX_HEAL) {
+              log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
+              escalate(pr.number);
+            } else {
+              log(`PR #${pr.number} CHANGES_REQUESTED -> heal ${heals + 1}/${MAX_HEAL}`);
+              syncBranch(branch);
+              await runGuarded(healOpts(pr.number, branch, issue));
+              forge.prClearChanges(pr.number);
+              syncBranch(branch);
+              if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
+              else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+            }
           } else {
-            log(`PR #${pr.number} CHANGES_REQUESTED -> heal ${heals + 1}/${MAX_HEAL}`);
-            syncBranch(branch);
-            await runGuarded(healOpts(pr.number, branch, issue));
-            forge.prClearChanges(pr.number);
-            syncBranch(branch);
-            if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
-            else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+            if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
+            else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
           }
-        } else {
-          if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
-          else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+          break prs; // this PR was this cycle's work
+        }
+        // Every active PR only had a stale conflict flag: nothing ran, so wait a poll interval
+        // for the forge to recompute rather than spinning. (No new dispatch: they're in flight.)
+        if (yielded === active.length) {
+          log(`all ${yielded} in-flight PR(s) had stale conflict flags — rechecked; sleeping ${cfg.pollMinutes}m`);
+          await sleepUnlessStopped(POLL_MS, stopNow);
         }
       } else {
         const next = await pickNextIssue(all, realPickDeps(L.ready, DRY));

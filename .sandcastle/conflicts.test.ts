@@ -58,7 +58,8 @@ function markerCounter() {
 const deps = (over: Partial<Deps>): Deps => {
   const c = markerCounter();
   return {
-    maxFailures: 3, failures: c.failures, markAttempt: c.markAttempt, markResolved: c.markResolved,
+    maxFailures: 3, alreadyContainsBase: () => false,
+    failures: c.failures, markAttempt: c.markAttempt, markResolved: c.markResolved,
     mechanical: () => "conflicted", agent: async () => true, escalate: () => {}, log: () => {}, ...over,
   };
 };
@@ -169,4 +170,58 @@ test("a mechanical-merge ERROR (not a conflict) falls back to the agent instead 
   }));
   assert.equal(out, "agent-resolved");
   assert.equal(agentRuns, 1);
+});
+
+// --- stale forge conflict flag (#68) -------------------------------------------------------
+
+test("stale flag: branch already contains base → 'stale-flag', and nothing is marked, merged, run or escalated", async () => {
+  const calls: string[] = [];
+  const out = await handleConflict(951, deps({
+    alreadyContainsBase: () => true,
+    failures: () => { calls.push("failures"); return 99; }, // even at/over the cap: a stale flag is not a failure
+    markAttempt: () => calls.push("markAttempt"), markResolved: () => calls.push("markResolved"),
+    mechanical: () => { calls.push("mechanical"); return "merged"; },
+    agent: async () => { calls.push("agent"); return true; },
+    escalate: () => calls.push("escalate"),
+  }));
+  assert.equal(out, "stale-flag");
+  assert.deepEqual(calls, []);
+});
+
+test("stale flag: a real conflict (branch lacks base) runs the mechanical-then-agent path exactly as before", async () => {
+  const calls: string[] = [];
+  const out = await handleConflict(1, deps({
+    alreadyContainsBase: () => false,
+    mechanical: () => { calls.push("mechanical"); return "conflicted"; },
+    markAttempt: () => calls.push("markAttempt"),
+    agent: async () => { calls.push("agent"); return true; },
+    markResolved: () => calls.push("markResolved"),
+  }));
+  assert.equal(out, "agent-resolved");
+  assert.deepEqual(calls, ["mechanical", "markAttempt", "agent", "markResolved"]);
+});
+
+test("stale flag: the check itself errors → fall through to the mechanical merge, never 'stale-flag'", async () => {
+  let mech = 0;
+  const out = await handleConflict(1, deps({
+    alreadyContainsBase: () => { throw new Error("fatal: couldn't find remote ref"); },
+    mechanical: () => { mech++; return "merged"; },
+  }));
+  assert.equal(out, "mechanical");
+  assert.equal(mech, 1);
+});
+
+test("stale flag with real git: a branch that already merged main is detected via baseTip/branchContains", async () => {
+  const fx = fixture({});
+  try {
+    diverge(fx.seed, "app.txt", (p) => writeFileSync(p, "value = 2\n"), () => appendFileSync(join(fx.seed, "CHANGELOG.md"), "- main\n"));
+    git(fx.seed, "checkout -q agent/issue-1"); git(fx.seed, "merge -q --no-edit main"); git(fx.seed, "push -q origin agent/issue-1");
+    let mech = 0;
+    const out = await handleConflict(1, deps({
+      alreadyContainsBase: () => branchContains(fx.host, "agent/issue-1", baseTip(fx.host, "main")),
+      mechanical: () => { mech++; return "merged"; },
+    }));
+    assert.equal(out, "stale-flag");
+    assert.equal(mech, 0);
+  } finally { fx.cleanup(); }
 });
