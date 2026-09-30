@@ -53,6 +53,13 @@ export type UiVerifyCfg = {
   artifactDir: string;
   artifactBranch?: string;
   canonDir?: string;
+  /**
+   * Uncommitted files `renderCmd` reads that the agent produces (#67) — e.g. a render spec and the
+   * seed/setup modules it points at, kept out of the PR. The agent publishes exactly these paths
+   * with its screenshots (to <artifactBranch>:pr-<n>/render-inputs/), so the loop can replay the
+   * render at a newer head instead of parking the PR. Omit when renderCmd needs only committed files.
+   */
+  renderInputs?: string[];
 };
 
 export type Cfg = {

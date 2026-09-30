@@ -6,7 +6,8 @@ import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
-import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
+import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
+import { rerenderBeforeEscalating, liveRenderAndPublish } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
@@ -389,12 +390,35 @@ async function main(): Promise<void> {
               // a human approves within the poll interval), and uiGate's diff would otherwise
               // throw on a missing ref and livelock the cycle.
               if (cfg.ui) syncBranch(branch);
-              const vg = uiGate(pr.number, branch, cfg.ui);
-              if (vg.required && vg.blocked) {
-                log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);
-                escalate(pr.number, vg.reason);
-                await sleepUnlessStopped(POLL_MS, stopNow);
-                break prs;
+              let vg = uiGate(pr.number, branch, cfg.ui);
+              if (vg.required && vg.blocked && cfg.ui) {
+                // Before parking: if only the head moved since a published render, replay the
+                // render at the new head (#67). Escalates only if that can't be done.
+                const ui = cfg.ui, ab = artifactBranch(ui);
+                const head = vg.kind === "missing" ? headShaOf(branch) : "";
+                const rr = await rerenderBeforeEscalating(pr.number, vg, {
+                  head,
+                  renderedHeads: () => renderedHeads(pr.number, ab),
+                  inputsConfigured: !!ui.renderInputs?.length,
+                  persistedInputs: () => persistedRenderInputs(pr.number, ab),
+                  renderAndPublish: () => liveRenderAndPublish({
+                    repo: ROOT, pr: pr.number, branch, head, ui, artifactBranch: ab, imageName: cfg.imageName,
+                    hooks: { sandbox: { onSandboxReady: sandboxReadyHooks(cfg.install, cfg.setupCommands ?? [], null) } },
+                    identity: requireGitIdentity(cfg.gitIdentity),
+                  }),
+                  recheck: () => uiGate(pr.number, branch, ui),
+                  log,
+                });
+                if (rr.ok === false) {
+                  log(`PR #${pr.number} APPROVED but visual verification is missing -> escalating`);
+                  escalate(pr.number, rr.reason);
+                  await sleepUnlessStopped(POLL_MS, stopNow);
+                  break prs;
+                }
+                vg = rr.gate;
+                const n = vg.required ? vg.artifacts.length : 0;
+                forge.prComment(pr.number, "--body", JSON.stringify(
+                  `AFK: the head moved to ${head.slice(0, 8)} after the last render, so the loop re-ran \`${ui.renderCmd}\` there: ${n} screenshot(s) at \`${ab}:${artifactPrefix(pr.number, head)}\`.`));
               }
               const pl = forge.prPipeline(pr.number);
               if (["success", "skipped", "none"].includes(pl.status)) {
