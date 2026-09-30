@@ -8,7 +8,7 @@ import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } fro
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains } from "./conflicts.js";
-import { closeLinkedIssue, type IssueCloseDeps } from "./merge-guard.js";
+import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
 const RULES = loadAgentRules();
@@ -218,6 +218,8 @@ async function main(): Promise<void> {
   checkReviewCredential();
   // Same for the commit identity (#52): refuse to start rather than fail every pushing cycle.
   requireGitIdentity(cfg.gitIdentity);
+  // The merge guard's landed check needs git >= 2.38; refuse to start rather than never merge.
+  assertGitSupportsMergeTree(sh("git --version"));
   let lastTriageAt: number | null = null;
   log(`AFK loop starting (concurrency 1, platform ${cfg.platform}, review ${cfg.reviewMode}${DRY ? ", DRY-RUN" : ""}). \`pnpm afk:stop\` stops after the current run; Ctrl-C stops sooner (again to force).`);
 
@@ -364,9 +366,23 @@ async function main(): Promise<void> {
             const pl = forge.prPipeline(pr.number);
             if (["success", "skipped", "none"].includes(pl.status)) {
               log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
-              forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge");
-              log(`merged #${pr.number}`);
-              if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
+              // Guarded (#71): never merge a change already on base; verify the merge finalized.
+              const landed = () => landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh });
+              const outcome = guardedMerge(pr.number, {
+                landed,
+                merge: () => forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge"),
+                stillOpen: () => forge.prList().some((p) => p.number === pr.number),
+                finalize: (why) => {
+                  const body = why === "already-landed"
+                    ? `AFK: this change is already on ${cfg.defaultBranch} — closing instead of merging it again.`
+                    : `AFK: the merge landed on ${cfg.defaultBranch} but the forge did not finalize this PR — closing it so it is not merged again.`;
+                  forge.prComment(pr.number, "--body", JSON.stringify(body));
+                  forge.prClose(pr.number);
+                },
+                closeIssue: () => { if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps); },
+                log,
+              });
+              if (outcome === "skipped-error" || outcome === "merge-pending") await sleepUnlessStopped(POLL_MS, stopNow);
             } else if (["running", "pending"].includes(pl.status)) {
               log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
               await sleepUnlessStopped(POLL_MS, stopNow);

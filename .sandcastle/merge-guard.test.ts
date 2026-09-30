@@ -1,7 +1,9 @@
-// Merge-path guards (#70) — fakes only at the forge boundary; no Docker, no network.
+// Merge-path guards (#70, #71) — fakes only at the forge boundary; no Docker, no network.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, copyFileSync } from "node:fs";
+import { existsSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -33,4 +35,89 @@ test("#70 post-merge: an issue the forge already closed gets neither", () => {
   const { calls, deps } = recorder({ 427: "closed" });
   assert.equal(mg.closeLinkedIssue(427, 951, deps), "already-closed");
   assert.deepEqual(calls, []);
+});
+
+// --- #71 merge guard -----------------------------------------------------------------------------
+
+test("#71 alreadyLanded: equal trees → true; different → false; empty base tree → false", () => {
+  assert.equal(mg.alreadyLanded("abc", "abc"), true);
+  assert.equal(mg.alreadyLanded("abc", "def"), false);
+  assert.equal(mg.alreadyLanded("", ""), false);
+});
+
+// Fake forge for guardedMerge: `landed` answers in sequence; every side effect is recorded.
+const mergeFake = (o: { landed: (boolean | Error)[]; openAfterMerge: boolean }) => {
+  const calls: string[] = [];
+  let i = 0;
+  const deps: import("./merge-guard.js").MergeDeps = {
+    landed: () => { const v = o.landed[Math.min(i++, o.landed.length - 1)]; if (v instanceof Error) throw v; return v; },
+    merge: () => { calls.push("pr-merge"); },
+    stillOpen: () => o.openAfterMerge,
+    finalize: (why) => { calls.push(`pr-close:${why}`); },
+    closeIssue: () => { calls.push("issue-close"); },
+    log: () => {},
+  };
+  return { calls, deps };
+};
+
+test("#71 already landed: pr-merge is NOT called; the PR and the issue are closed once each", () => {
+  const { calls, deps } = mergeFake({ landed: [true], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(953, deps), "finalized-landed");
+  assert.deepEqual(calls, ["pr-close:already-landed", "issue-close"]);
+});
+
+test("#71 not landed: pr-merge is called exactly once (normal merge unchanged)", () => {
+  const { calls, deps } = mergeFake({ landed: [false], openAfterMerge: false });
+  assert.equal(mg.guardedMerge(957, deps), "merged");
+  assert.deepEqual(calls, ["pr-merge", "issue-close"]);
+});
+
+test("#71 the landed check errors: neither merge nor close (fail closed, never 'merge anyway')", () => {
+  const { calls, deps } = mergeFake({ landed: [new Error("fatal: bad object")], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(950, deps), "skipped-error");
+  assert.deepEqual(calls, []);
+});
+
+test("#71 merged but not finalized: one pr-close, one issue-close, and NO second pr-merge", () => {
+  const { calls, deps } = mergeFake({ landed: [false, true], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(953, deps), "finalized-after-merge");
+  assert.deepEqual(calls, ["pr-merge", "pr-close:not-finalized", "issue-close"]);
+  assert.equal(calls.filter((c) => c === "pr-merge").length, 1);
+});
+
+test("#71 still open after merge and not landed: leave it for next cycle (no close)", () => {
+  const { calls, deps } = mergeFake({ landed: [false, false], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(953, deps), "merge-pending");
+  assert.deepEqual(calls, ["pr-merge"]);
+});
+
+test("#71 real git: landedOnBase is true once the change was squash-applied to base, false before", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-landed-"));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const run = (c: string, cwd: string) => execSync(c, { cwd, env, encoding: "utf8" }).trim();
+  const g = (cwd: string, c: string) => run(`git -c user.name=t -c user.email=t@t -c init.defaultBranch=main ${c}`, cwd);
+  try {
+    const origin = join(dir, "origin.git"), seed = join(dir, "seed"), host = join(dir, "host");
+    g(dir, `init -q --bare ${origin}`); g(dir, `clone -q ${origin} ${seed}`);
+    writeFileSync(join(seed, "a.txt"), "one\n"); g(seed, "add -A"); g(seed, "commit -q -m init"); g(seed, "push -q origin HEAD:main");
+    g(seed, "checkout -q -b agent/issue-1"); writeFileSync(join(seed, "a.txt"), "one\ntwo\n");
+    g(seed, "commit -qam change"); g(seed, "push -q origin agent/issue-1");
+    // unrelated progress on main, so base is not simply the branch's parent
+    g(seed, "checkout -q main"); writeFileSync(join(seed, "b.txt"), "other\n"); g(seed, "add -A"); g(seed, "commit -q -m other"); g(seed, "push -q origin main");
+    g(dir, `clone -q ${origin} ${host}`);
+    const check = () => mg.landedOnBase({ repo: host, base: "main", branch: "agent/issue-1", run });
+    assert.equal(check(), false, "change not on base yet");
+    // Squash the change onto main by hand (what a forge squash-merge does).
+    g(seed, "merge -q --squash agent/issue-1"); g(seed, "commit -q -m squash"); g(seed, "push -q origin main");
+    assert.equal(check(), true, "change already on base");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#71 git version gate: >= 2.38 supports merge-tree --write-tree; older refuses to start, naming the fix", () => {
+  for (const v of ["git version 2.38.0", "git version 2.54.0 (Apple Git-157)", "git version 3.0.1"])
+    assert.equal(mg.gitSupportsMergeTree(v), true, v);
+  for (const v of ["git version 2.34.1", "git version 1.9.9", "garbage"])
+    assert.equal(mg.gitSupportsMergeTree(v), false, v);
+  assert.throws(() => mg.assertGitSupportsMergeTree("git version 2.34.1"), /git >= 2\.38.*found "git version 2\.34\.1"/);
+  assert.doesNotThrow(() => mg.assertGitSupportsMergeTree("git version 2.38.1"));
 });
