@@ -87,3 +87,22 @@ export function guardedMerge(pr: number, d: MergeDeps): MergeOutcome {
   d.log(`PR #${pr}: still open after the merge call and not on base — re-evaluating next cycle`);
   return "merge-pending";
 }
+
+// The landed check needs `git merge-tree --write-tree` (git ≥ 2.38). On an older git it errors on
+// every approved PR, and fail-closed then means the loop never merges again — silently. Refuse to
+// start instead, naming the fix (review follow-up on #71).
+export const MIN_GIT: [number, number] = [2, 38];
+export const gitSupportsMergeTree = (versionOutput: string): boolean => {
+  const m = versionOutput.match(/(\d+)\.(\d+)/);
+  if (!m) return false;
+  const [maj, min] = [Number(m[1]), Number(m[2])];
+  return maj > MIN_GIT[0] || (maj === MIN_GIT[0] && min >= MIN_GIT[1]);
+};
+export const assertGitSupportsMergeTree = (versionOutput: string): void => {
+  if (!gitSupportsMergeTree(versionOutput)) {
+    throw new Error(
+      `the AFK loop needs git >= ${MIN_GIT.join(".")} on the host (for \`git merge-tree --write-tree\`, used to ` +
+      `avoid re-merging an already-landed change); found "${versionOutput.trim()}". Upgrade git and restart.`,
+    );
+  }
+};
