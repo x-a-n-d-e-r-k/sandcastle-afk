@@ -13,6 +13,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 cat > "$TMP/glab" <<'STUB'
 #!/usr/bin/env bash
 if [[ "$1 $2" == "mr list" ]]; then
+  # Page size must match gh's --limit 100 (glab defaults to 30 per page).
+  [[ " $* " == *" --per-page 100 "* ]] || { echo "glab mr list called without --per-page 100: $*" >&2; exit 3; }
   case " $* " in
     *" --closed "*) echo '[{"iid":1,"project_id":9,"source_branch":"agent/issue-1","state":"closed","labels":[]}]' ;;
     *" --merged "*) echo '[{"iid":2,"project_id":9,"source_branch":"agent/issue-2","state":"merged","labels":[]}]' ;;
