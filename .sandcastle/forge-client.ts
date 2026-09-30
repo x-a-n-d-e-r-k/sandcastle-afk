@@ -86,6 +86,18 @@ export const prRequestChanges = (num: number, ...rest: Arg[]): void => {
   forge(`pr-request-changes ${[num, ...rest].join(" ")}`.trim());
 };
 
+export const prHealCount = (num: number, ...rest: Arg[]): string =>
+  forge(`pr-heal-count ${[num, ...rest].join(" ")}`.trim());
+
+export const prHealMark = (num: number, ...rest: Arg[]): void => {
+  forge(`pr-heal-mark ${[num, ...rest].join(" ")}`.trim());
+};
+
+export const prHealReset = (num: number, ...rest: Arg[]): void => {
+  forge(`pr-heal-reset ${[num, ...rest].join(" ")}`.trim());
+};
+
+/** @deprecated counts changes-requested reviews, not heals; the heal budget uses prHealCount (#69) */
 export const prChangesCount = (num: number, ...rest: Arg[]): string =>
   forge(`pr-changes-count ${[num, ...rest].join(" ")}`.trim());
 

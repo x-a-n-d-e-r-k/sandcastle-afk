@@ -89,7 +89,7 @@ TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|inte
 
 is_retryable_verb() {
   case "$1" in
-    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-feedback) return 0 ;;
+    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-feedback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -319,6 +319,26 @@ case "$verb" in
     else
       glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
     fi ;;
+
+  pr-heal-count)  # heal ATTEMPTS against the budget: [forge:heal] notes after the last [forge:heal-reset] (#69)
+    # The budget used to count changes-requested REVIEWS (pr-changes-count), so re-reviews of an
+    # unchanged head parked PRs that were never healed, and nothing could reset it.
+    [[ -n "$NUM" ]] || die "pr-heal-count needs <number>"
+    since_reset='(map(startswith("[forge:heal-reset]")) | indices(true) | last) as $i
+      | .[(if $i == null then 0 else $i + 1 end):] | map(select(startswith("[forge:heal]"))) | length'
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json comments | jq "[.comments[].body] | $since_reset"
+    else
+      glab mr note list "$NUM" -F json 2>/dev/null | jq "[.[].notes[]?.body] | $since_reset" 2>/dev/null || echo 0
+    fi ;;
+
+  pr-heal-mark)  # record one heal attempt (posted BEFORE the heal runs, so a crashed heal still counts)
+    [[ -n "$NUM" ]] || die "pr-heal-mark needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:heal]"; else glab mr note "$NUM" -m "[forge:heal]"; fi ;;
+
+  pr-heal-reset)  # give a PR a fresh heal budget (e.g. a human un-parking it); keeps the audit trail
+    [[ -n "$NUM" ]] || die "pr-heal-reset needs <number>"
+    if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:heal-reset]"; else glab mr note "$NUM" -m "[forge:heal-reset]"; fi ;;
 
   pr-clear-changes)  # called after a heal push, to reset the gitlab label
     [[ -n "$NUM" ]] || die "pr-clear-changes needs <number>"

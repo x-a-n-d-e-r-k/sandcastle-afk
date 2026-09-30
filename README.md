@@ -164,6 +164,8 @@ Now the implementer stops over-building and the reviewer flags over-engineering 
 
 - **An issue is `agent-ready` but never gets picked up, and it has a closed agent PR.** A closed `agent/issue-N` PR counts as resolved. If you closed an *orphan* PR by hand (its source branch never reached origin, so the MR has no commit), add the `afk-orphan` label (`labels.orphan`) to that PR, and its issue can be dispatched again. The loop now closes and labels orphans it owns on its own.
 
+- **Un-parking a PR into a fresh heal budget.** `maxHeal` counts heal *attempts* (`[forge:heal]` markers), not reviews. To give a parked PR another round, remove `needs-human` and run `forge pr-heal-reset <n>`, which posts `[forge:heal-reset]` and keeps the audit trail. The next changes-requested review then heals instead of re-parking.
+
 ## File map
 
 ```
