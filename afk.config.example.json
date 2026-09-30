@@ -57,14 +57,20 @@
   "//ui": [
     "OPTIONAL (#19). Omit this key entirely and nothing changes — non-UI repos are unaffected.",
     "When present, a PR whose diff matches verifyGlobs MUST publish screenshots or the loop",
-    "refuses to merge it. The layer never renders: renderCmd is YOUR command and your",
-    "dockerBaseImage must contain whatever it needs (e.g. a browser). The agent pushes images",
-    "to artifactBranch (an orphan branch, never merged) under pr-<n>/.",
+    "refuses to merge it. renderCmd is YOUR command and your dockerBaseImage must contain",
+    "whatever it needs (e.g. a browser). The agent pushes images to artifactBranch (an orphan",
+    "branch, never merged) under pr-<n>/<head-sha>/. If the head later moves (the loop merges",
+    "the base branch in, a conflict is resolved), the loop re-runs renderCmd itself in your",
+    "image at the new head before parking the PR (#67) — only for a PR that already published",
+    "a render.",
     "  verifyGlobs    globs that mark a PR UI-touching",
     "  renderCmd      writes images into artifactDir; capture desktop + narrow, dark + light",
     "  artifactDir    where renderCmd writes (gitignore it)",
     "  artifactBranch optional, default afk/artifacts",
-    "  canonDir       optional canonical mockups to compare against"
+    "  canonDir       optional canonical mockups to compare against",
+    "  renderInputs   optional: uncommitted files renderCmd reads that the agent writes (e.g. a",
+    "                 render spec + its seed modules). Published with the screenshots so the",
+    "                 loop can replay the render. Omit if renderCmd needs only committed files."
   ],
   "//ui-example": {
     "//": "INERT sample — the `//` prefix makes this NOT the `ui` key, so the gate stays OFF. To enable, copy this into your afk.config.json as `ui` (no prefix) and point renderCmd at a real script. Shipping it armed would turn the gate ON for every consumer (the test suite seeds afk.config.json from this file) against a renderCmd that doesn't exist.",
@@ -72,6 +78,7 @@
     "renderCmd": "pnpm afk:render",
     "artifactDir": ".afk/screenshots",
     "artifactBranch": "afk/artifacts",
-    "canonDir": ""
+    "canonDir": "",
+    "renderInputs": [".afk/render.json"]
   }
 }

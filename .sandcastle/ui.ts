@@ -7,9 +7,10 @@ import { cfg, sh, type UiVerifyCfg } from "./config.js";
 // ever rendered them.
 //
 // Division of labour, chosen deliberately:
-//   - The layer NEVER renders. It cannot know how to boot an arbitrary consumer's app, and
+//   - The layer never knows HOW to render. It cannot boot an arbitrary consumer's app, and
 //     baking a browser into Dockerfile.template would tax every non-UI consumer. The consumer
-//     supplies `ui.renderCmd`; their base image owns having a browser.
+//     supplies `ui.renderCmd`; their base image owns having a browser. (The host may REPLAY that
+//     command in the consumer's image when only the head moved — see rerender.ts, #67.)
 //   - The AGENT publishes. There is no post-run hook in @ai-hero/sandcastle (`onSandboxReady`
 //     is the only one) and RunResult exposes no worktree path, so the host cannot retrieve
 //     uncommitted files after a run. The agent pushes screenshots to an orphan artifact branch
@@ -128,10 +129,32 @@ export const artifactsFor = (
   }
 };
 
+/** Where a PR's render inputs (#67) live on the artifact branch — one copy per PR, latest wins. */
+export const renderInputsPrefix = (pr: number): string => `pr-${pr}/render-inputs/`;
+
+/** Head SHAs this PR has published screenshots for (the `pr-<n>/<sha>/` dirs), newest unknown. */
+export const renderedHeads = (pr: number, branch: string = DEFAULT_ARTIFACT_BRANCH, run: (c: string) => string = sh): string[] => {
+  try { run(`git fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"`); } catch { return []; }
+  try {
+    return run(`git ls-tree -d --name-only origin/${branch} -- "pr-${pr}/"`)
+      .split("\n").map((s) => s.trim().slice(`pr-${pr}/`.length)).filter((s) => s && s !== "render-inputs");
+  } catch { return []; }
+};
+
+/** Files persisted under the PR's render-inputs prefix, or [] (assumes the branch was fetched). */
+export const persistedRenderInputs = (pr: number, branch: string = DEFAULT_ARTIFACT_BRANCH, run: (c: string) => string = sh): string[] => {
+  try {
+    return run(`git ls-tree -r --name-only origin/${branch} -- "${renderInputsPrefix(pr)}"`)
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+  } catch { return []; }
+};
+
 export type UiGate =
   | { required: false }
   | { required: true; blocked: false; files: string[]; artifacts: string[] }
-  | { required: true; blocked: true; files: string[]; artifacts: string[]; reason: string };
+  // kind "missing": the diff resolved and no screenshots exist for the CURRENT head — the one case
+  // a re-render can fix (#67). kind "error": the diff/head couldn't be resolved (fail closed, #18).
+  | { required: true; blocked: true; kind: "missing" | "error"; files: string[]; artifacts: string[]; reason: string };
 
 /**
  * The merge decision. The git reads (`changed`, `artifacts`) are injectable, so it is
@@ -171,7 +194,7 @@ export const uiGate = (
     sha = headSha(branch);
   } catch (e) {
     return {
-      required: true, blocked: true, files: [], artifacts: [],
+      required: true, blocked: true, kind: "error", files: [], artifacts: [],
       reason: `could not resolve the diff/head for PR #${pr} (branch ${branch}): ${(e as Error).message}. Failing closed — a human should confirm whether this touches UI and merge manually.`,
     };
   }
@@ -183,7 +206,7 @@ export const uiGate = (
   const artifacts = arts(pr, sha, artifactBranch(ui));
   if (!artifacts.length) {
     return {
-      required: true, blocked: true, files, artifacts,
+      required: true, blocked: true, kind: "missing", files, artifacts,
       reason: `PR #${pr} changes ${files.length} UI file(s) (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) but published no screenshots to ${artifactBranch(ui)}:${artifactPrefix(pr, sha)} for the current head ${sha.slice(0, 8)}. Green checks do not prove a UI change renders; a heal since the last render needs a fresh one.`,
     };
   }
@@ -201,6 +224,14 @@ export const implementUiBlock = (ui: UiCfg | undefined): string => {
   if (!ui || !ui.verifyGlobs?.length) return "";
   const canon = ui.canonDir
     ? `\n- Compare against the canonical mockups in \`${ui.canonDir}\`. If your render disagrees with canon, fix the code — canon is authoritative.`
+    : "";
+  // #67: persist exactly the configured render inputs (nothing else), so the loop can replay this
+  // render at a newer head (e.g. after it merges the base branch in) instead of parking the PR.
+  const inputs = ui.renderInputs ?? [];
+  const persistInputs = inputs.length
+    ? `\n   # render inputs: lets the loop re-render at a newer head instead of parking the PR
+   rm -rf "$tmp/pr-$PR/render-inputs" && mkdir -p "$tmp/pr-$PR/render-inputs"
+   tar -cf - ${inputs.map((p) => JSON.stringify(p)).join(" ")} | tar -xf - -C "$tmp/pr-$PR/render-inputs"`
     : "";
   return `## Visual verification (REQUIRED if you touch UI)
 
@@ -226,7 +257,7 @@ ${ui.verifyGlobs.map((g) => `- \`${g}\``).join("\n")}
      git -C "$tmp" remote add origin "$REMOTE"
      git -C "$tmp" checkout -q --orphan ${artifactBranch(ui)}
    }
-   mkdir -p "$tmp/pr-$PR/$SHA" && cp -r "${ui.artifactDir}/." "$tmp/pr-$PR/$SHA/"
+   mkdir -p "$tmp/pr-$PR/$SHA" && cp -r "${ui.artifactDir}/." "$tmp/pr-$PR/$SHA/"${persistInputs}
    git -C "$tmp" add -A
    git -C "$tmp" -c user.email=afk@local -c user.name=afk commit -q -m "artifacts: pr-$PR @ $SHA"
    git -C "$tmp" push -q origin HEAD:refs/heads/${artifactBranch(ui)}
