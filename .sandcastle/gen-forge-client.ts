@@ -26,6 +26,8 @@ type Desc = {
   requiredArgs: string[];
   jsonFields?: string[];
   array?: boolean;
+  /** Kept for compatibility; the note becomes a JSDoc @deprecated tag on the client function. */
+  deprecated?: string;
 };
 
 const camel = (verb: string): string =>
@@ -52,17 +54,18 @@ export const generateClient = (registry: Record<string, Desc>): string => {
     const params = hasNum ? "num: number, ...rest: Arg[]" : "...rest: Arg[]";
     const argsArray = hasNum ? "[num, ...rest]" : "rest";
     const call = `\`${verb} \${${argsArray}.join(" ")}\`.trim()`;
+    const doc = d.deprecated ? `/** @deprecated ${d.deprecated} */\n` : "";
 
     if (d.output === "json") {
       const iface = d.array ? `${pascal(verb)}Item` : pascal(verb);
       const body = (d.jsonFields ?? []).map((f) => `  ${f}: ${fieldType(f)};`).join("\n");
       interfaces.push(`export interface ${iface} {\n${body}\n}`);
       const ret = d.array ? `${iface}[]` : iface;
-      fns.push(`export const ${name} = (${params}): ${ret} =>\n  forgeJSON<${ret}>(${call});`);
+      fns.push(`${doc}export const ${name} = (${params}): ${ret} =>\n  forgeJSON<${ret}>(${call});`);
     } else if (d.output === "text") {
-      fns.push(`export const ${name} = (${params}): string =>\n  forge(${call});`);
+      fns.push(`${doc}export const ${name} = (${params}): string =>\n  forge(${call});`);
     } else {
-      fns.push(`export const ${name} = (${params}): void => {\n  forge(${call});\n};`);
+      fns.push(`${doc}export const ${name} = (${params}): void => {\n  forge(${call});\n};`);
     }
   }
 

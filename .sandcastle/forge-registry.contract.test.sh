@@ -97,7 +97,9 @@ bad="$(jq -r '
       if $d.output != "json" and ($d|has("jsonFields"))
         then "\($v): jsonFields present but output is not json" else empty end,
       if ($d|has("array")) and ($d.array|type) != "boolean" then "\($v): array not boolean" else empty end,
-      if ($d|has("array")) and $d.output != "json" then "\($v): array present but output is not json" else empty end
+      if ($d|has("array")) and $d.output != "json" then "\($v): array present but output is not json" else empty end,
+      if ($d|has("deprecated")) and (($d.deprecated|type) != "string" or ($d.deprecated|length) == 0)
+        then "\($v): deprecated must be a non-empty string (the note shown to callers)" else empty end
     ] | .[]
 ' "$REG")"
 [[ -z "$bad" ]] || fail "schema violations:"$'\n'"$bad"

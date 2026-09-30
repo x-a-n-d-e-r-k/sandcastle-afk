@@ -8,6 +8,7 @@ import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } fro
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
+import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
@@ -190,12 +191,25 @@ const issueCloseDeps: IssueCloseDeps = {
   log,
 };
 
+// Live wiring for the heal budget (#69): counts heal ATTEMPTS, not reviews; marked before each run.
+const healBudget = (pr: number, heal: () => Promise<void>): HealDeps => ({
+  maxHeal: MAX_HEAL,
+  count: () => Number(forge.prHealCount(pr)) || 0,
+  mark: () => forge.prHealMark(pr),
+  heal,
+  escalate: (n) => {
+    log(`PR #${pr} heal cap (${n}/${MAX_HEAL} attempts) -> escalating to ${L.needsHuman}`);
+    escalate(pr, `${n} heal attempts did not converge (forge pr-heal-reset ${pr} gives it a fresh budget)`);
+  },
+  log,
+});
+
 // After a conflict outcome: a stale flag moves on to the next PR in the same cycle (#68);
 // everything else is this cycle's work.
 export const afterConflict = (o: ConflictResult): "next-pr" | "end-cycle" =>
   o === "stale-flag" ? "next-pr" : "end-cycle";
 
-function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
+function escalate(pr: number, reason: string) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
   forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
 }
@@ -414,36 +428,26 @@ async function main(): Promise<void> {
                   forge.prPipelineRetry(pr.number);
                   await sleepUnlessStopped(POLL_MS, stopNow);
                 } else {
-                  const heals = Number(forge.prChangesCount(pr.number)) || 0;
-                  if (heals >= MAX_HEAL) {
-                    log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating`);
-                    escalate(pr.number);
-                  } else {
-                    log(`PR #${pr.number} pipeline failing after retries -> heal ${heals + 1}/${MAX_HEAL}`);
+                  await healWithBudget(pr.number, "pipeline failing after retries", healBudget(pr.number, async () => {
                     syncBranch(branch);
                     await runGuarded(healOpts(pr.number, branch, issue));
                     forge.prClearChanges(pr.number);
                     syncBranch(branch);
                     log(`re-reviewing #${pr.number}`);
                     await runGuarded(reviewOpts(pr.number, branch, issue));
-                  }
+                  }));
                 }
               }
             }
           } else if (pr.reviewState === "CHANGES_REQUESTED") {
-            const heals = Number(forge.prChangesCount(pr.number)) || 0;
-            if (heals >= MAX_HEAL) {
-              log(`PR #${pr.number} heal cap (${heals}/${MAX_HEAL}) -> escalating to ${L.needsHuman}`);
-              escalate(pr.number);
-            } else {
-              log(`PR #${pr.number} CHANGES_REQUESTED -> heal ${heals + 1}/${MAX_HEAL}`);
+            await healWithBudget(pr.number, "CHANGES_REQUESTED", healBudget(pr.number, async () => {
               syncBranch(branch);
               await runGuarded(healOpts(pr.number, branch, issue));
               forge.prClearChanges(pr.number);
               syncBranch(branch);
               if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
               else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
-            }
+            }));
           } else {
             if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
             else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
