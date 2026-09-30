@@ -141,3 +141,14 @@ test("orphan resume path: this loop's own claim whose closed PR is orphan-labell
   assert.equal((await pickNextIssue([], d))?.number, 433);
   assert.deepEqual(d.edits, []);
 });
+
+// --- merged PRs (#70): a merged agent PR resolves its issue even if the forge left it open -----
+
+test("merged: an own-claimed ready issue whose only PR merged is NOT resumed and NOT picked", async () => {
+  const claimed: Issue = { number: 427, title: "shipped", labels: ["agent-ready", "working:a"] };
+  const unclaimed: Issue = { number: 427, title: "shipped", labels: ["agent-ready"] };
+  const merged: PR = { headRef: "agent/issue-427", labels: [], merged: true };
+  // Resume path (own claim) and candidate path (no claim) alike.
+  assert.equal(await pickNextIssue([], deps({ listReady: () => [claimed], listClosed: () => [merged] })), undefined);
+  assert.equal(await pickNextIssue([], deps({ listReady: () => [unclaimed], listClosed: () => [merged], mine: "", loopId: "" })), undefined);
+});

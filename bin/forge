@@ -220,8 +220,19 @@ case "$verb" in
       # Query the per-MR /approvals endpoint and FAIL CLOSED: APPROVED only when an
       # approval RULE is satisfied (approvals_required>0 && approvals_left==0) — so a
       # project with no approval rule never auto-merges unreviewed.
-      gl=(); case "$state" in closed) gl=(--closed);; merged) gl=(--merged);; all) gl=(--all);; esac
-      glab mr list ${gl[@]+"${gl[@]}"} -F json | jq -c '.[]' | while read -r mr; do
+      # `closed` must include MERGED MRs, as GitHub's does (#70): GitLab keeps merged in its own
+      # state, so `--closed` alone hides them and the loop re-dispatches work that already shipped.
+      # --per-page 100 matches gh's --limit 100: glab's default page is 30, so an older merged MR would
+      # otherwise drop out of the list on a busy project.
+      gl_list() {
+        case "$state" in
+          closed) { glab mr list --closed --per-page 100 -F json; glab mr list --merged --per-page 100 -F json; } | jq -s 'add | unique_by(.iid)' ;;
+          merged) glab mr list --merged --per-page 100 -F json ;;
+          all) glab mr list --all --per-page 100 -F json ;;
+          *) glab mr list --per-page 100 -F json ;;
+        esac
+      }
+      gl_list | jq -c '.[]' | while read -r mr; do
         iid=$(jq -r '.iid' <<<"$mr"); pid=$(jq -r '.project_id' <<<"$mr")
         appr="$(glab api "projects/$pid/merge_requests/$iid/approvals" 2>/dev/null || echo '{}')"
         jq -n --argjson mr "$mr" --argjson appr "$appr" --arg cr "$CHANGES_LABEL" '
