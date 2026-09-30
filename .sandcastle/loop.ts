@@ -7,7 +7,7 @@ import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
-import { rerenderBeforeEscalating, liveRenderAndPublish } from "./rerender.js";
+import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
@@ -394,11 +394,12 @@ async function main(): Promise<void> {
               if (vg.required && vg.blocked && cfg.ui) {
                 // Before parking: if only the head moved since a published render, replay the
                 // render at the new head (#67). Escalates only if that can't be done.
-                const ui = cfg.ui, ab = artifactBranch(ui);
+                const ui = cfg.ui, ab = artifactBranch(ui), uiFiles = vg.files;
                 const head = vg.kind === "missing" ? headShaOf(branch) : "";
                 const rr = await rerenderBeforeEscalating(pr.number, vg, {
                   head,
                   renderedHeads: () => renderedHeads(pr.number, ab),
+                  uiUnchangedSince: (sha) => uiFilesUnchanged({ repo: ROOT, files: uiFiles, a: sha, b: head }),
                   inputsConfigured: !!ui.renderInputs?.length,
                   persistedInputs: () => persistedRenderInputs(pr.number, ab),
                   renderAndPublish: () => liveRenderAndPublish({

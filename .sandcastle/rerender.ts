@@ -31,6 +31,12 @@ export type RerenderDeps = {
   head: string;
   /** Head SHAs this PR already published screenshots for. */
   renderedHeads: () => string[];
+  /**
+   * Are the PR's UI files (gate.files) byte-identical at `sha` and at `head`? True means only the
+   * base branch moved the head since that render, so the render a reviewer saw still shows the
+   * PR's UI. False (or any git error) means the PR's own UI changed: a human/reviewer must look.
+   */
+  uiUnchangedSince: (sha: string) => boolean;
   /** Is `ui.renderInputs` configured (does the render need replayed inputs)? */
   inputsConfigured: boolean;
   /** Files persisted under pr-<n>/render-inputs/. */
@@ -52,11 +58,17 @@ export async function rerenderBeforeEscalating(pr: number, gate: Blocked, d: Rer
   if (gate.kind !== "missing") return { ok: false, reason: gate.reason };
   const older = d.renderedHeads().filter((sha) => sha !== d.head);
   if (!older.length) return { ok: false, reason: gate.reason }; // never rendered: a human's call (#19)
+  // Only replay a render a reviewer already saw: the PR's own UI must be unchanged since then. A
+  // heal that rewrote UI without re-rendering is exactly what the gate exists to stop.
+  const basis = older.find((sha) => { try { return d.uiUnchangedSince(sha); } catch { return false; } });
+  if (!basis) {
+    return { ok: false, reason: `${gate.reason} Not re-rendered automatically: this PR's own UI files changed since its last render (${older[0].slice(0, 8)}), so the new render needs a reviewer.` };
+  }
   if (d.inputsConfigured && !d.persistedInputs().length) {
     return { ok: false, reason: `${gate.reason} Re-render not attempted: \`ui.renderInputs\` is configured but there is no render spec to replay (nothing published under ${renderInputsPrefix(pr)}).` };
   }
 
-  d.log(`PR #${pr}: screenshots exist for an older head (${older[0].slice(0, 8)}) but not ${d.head.slice(0, 8)} -> re-rendering`);
+  d.log(`PR #${pr}: UI unchanged since the render at ${basis.slice(0, 8)}; only the head moved (${d.head.slice(0, 8)}) -> re-rendering`);
   let r: { exitCode: number; output: string };
   try { r = await d.renderAndPublish(); }
   catch (e) { return { ok: false, reason: `${gate.reason} The automatic re-render at ${d.head.slice(0, 8)} could not run: ${lastLine((e as Error).message)}` }; }
@@ -69,6 +81,24 @@ export async function rerenderBeforeEscalating(pr: number, gate: Blocked, d: Rer
 }
 
 // --- live pieces ------------------------------------------------------------------------------
+
+export const DEFAULT_RENDER_TIMEOUT_SECONDS = 900;
+export const renderCommand = (ui: UiCfg): string =>
+  `timeout ${ui.renderTimeoutSeconds ?? DEFAULT_RENDER_TIMEOUT_SECONDS}s sh -c ${shq(ui.renderCmd)}`;
+
+// Are the PR's UI files byte-identical at two commits? Any unresolvable path (added/removed
+// since, or a commit that isn't present) counts as changed — the conservative answer.
+export const uiFilesUnchanged = (o: { repo: string; files: string[]; a: string; b: string; run?: Run }): boolean => {
+  const run = o.run ?? sh;
+  if (!o.files.length) return false;
+  for (const f of o.files) {
+    let x: string, y: string;
+    try { x = run(`git rev-parse ${shq(`${o.a}:${f}`)}`, o.repo); y = run(`git rev-parse ${shq(`${o.b}:${f}`)}`, o.repo); }
+    catch { return false; }
+    if (x !== y) return false;
+  }
+  return true;
+};
 
 type Run = (cmd: string, cwd: string) => string;
 
@@ -95,7 +125,12 @@ export const publishArtifacts = (o: {
     const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
     run("git add -A", tmp);
     run(`git ${as} commit -q -m ${shq(`artifacts: pr-${o.pr} @ ${o.sha} (loop re-render)`)}`, tmp);
-    run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp);
+    try { run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp); }
+    catch {
+      // Another loop/agent published to the artifact branch at the same moment: rebase once, retry.
+      run(`git pull -q --rebase origin ${shq(o.artifactBranch)}`, tmp);
+      run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp);
+    }
     return files.length;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -116,10 +151,17 @@ export const liveRenderAndPublish = async (o: {
     if (at !== o.head) throw new Error(`sandbox worktree is at ${at.slice(0, 8)}, not the PR head ${o.head.slice(0, 8)}`);
     if (o.ui.renderInputs?.length) {
       // pr-<n>/render-inputs/<path> → <worktree>/<path>
-      sh(`git archive --format=tar origin/${o.artifactBranch} ${shq(renderInputsPrefix(o.pr))} | tar -xf - --strip-components=2 -C ${shq(wt)}`, o.repo);
+      // Two steps, not a pipe: a failing `git archive` must not be masked by tar's exit status.
+      const tarball = join(tmpdir(), `afk-render-inputs-${o.pr}-${process.pid}.tar`);
+      try {
+        sh(`git archive --format=tar -o ${shq(tarball)} origin/${o.artifactBranch} ${shq(renderInputsPrefix(o.pr))}`, o.repo);
+        sh(`tar -xf ${shq(tarball)} --strip-components=2 -C ${shq(wt)}`, o.repo);
+      } finally { rmSync(tarball, { force: true }); }
     }
     rmSync(join(wt, o.ui.artifactDir), { recursive: true, force: true });
-    const r = await sb.exec(o.ui.renderCmd);
+    // Bounded like every other sandbox step: a render that hangs (a dev server that never comes up)
+    // must not stall the loop. coreutils `timeout` exits 124, which escalates with its failure line.
+    const r = await sb.exec(renderCommand(o.ui));
     const output = `${r.stdout}\n${r.stderr}`;
     if (r.exitCode !== 0) return { exitCode: r.exitCode, output };
     publishArtifacts({ repo: o.repo, artifactBranch: o.artifactBranch, pr: o.pr, sha: o.head, srcDir: join(wt, o.ui.artifactDir), identity: o.identity });
