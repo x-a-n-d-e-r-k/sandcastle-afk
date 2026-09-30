@@ -8,6 +8,7 @@ import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } fro
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock } from "./ui.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains } from "./conflicts.js";
+import { closeLinkedIssue, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 
 const RULES = loadAgentRules();
@@ -180,6 +181,14 @@ export function handleOrphan(pr: { number: number; headRef: string }, d: OrphanD
   d.close();
   d.releaseClaim();
 }
+
+// Live forge wiring for closing a PR's linked issue and releasing this loop's claim (#70).
+const issueCloseDeps: IssueCloseDeps = {
+  issueState: (n) => forge.issueView(n).state,
+  closeIssue: (n, comment) => forge.issueClose(n, "--comment", JSON.stringify(comment)),
+  releaseClaim: (n) => { if (MINE) forge.issueEdit(n, "--remove-label", MINE); },
+  log,
+};
 
 function escalate(pr: number, reason = `review requested changes ${MAX_HEAL}x without converging`) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
@@ -357,6 +366,7 @@ async function main(): Promise<void> {
               log(`PR #${pr.number} APPROVED, pipeline ${pl.status}${vg.required ? `, ${vg.artifacts.length} screenshot(s)` : ""} -> merging`);
               forge.prMerge(pr.number, "--squash", "--delete-branch", "--no-auto-merge");
               log(`merged #${pr.number}`);
+              if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
             } else if (["running", "pending"].includes(pl.status)) {
               log(`PR #${pr.number} approved; pipeline ${pl.status} — waiting`);
               await sleepUnlessStopped(POLL_MS, stopNow);
