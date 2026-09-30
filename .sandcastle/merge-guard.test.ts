@@ -112,3 +112,12 @@ test("#71 real git: landedOnBase is true once the change was squash-applied to b
     assert.equal(check(), true, "change already on base");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("#71 git version gate: >= 2.38 supports merge-tree --write-tree; older refuses to start, naming the fix", () => {
+  for (const v of ["git version 2.38.0", "git version 2.54.0 (Apple Git-157)", "git version 3.0.1"])
+    assert.equal(mg.gitSupportsMergeTree(v), true, v);
+  for (const v of ["git version 2.34.1", "git version 1.9.9", "garbage"])
+    assert.equal(mg.gitSupportsMergeTree(v), false, v);
+  assert.throws(() => mg.assertGitSupportsMergeTree("git version 2.34.1"), /git >= 2\.38.*found "git version 2\.34\.1"/);
+  assert.doesNotThrow(() => mg.assertGitSupportsMergeTree("git version 2.38.1"));
+});
