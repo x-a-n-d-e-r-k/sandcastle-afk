@@ -163,7 +163,7 @@ test("config.ts reports EVERY missing required key at load, not just the first",
   const dir = mkdtempSync(join(tmpdir(), "afk-cfgload-"));
   try {
     execSync("mkdir -p .sandcastle", { cwd: dir });
-    for (const f of ["config.ts", "config-contract.ts"]) writeFileSync(join(dir, ".sandcastle", f), readFileSync(join(ROOT, ".sandcastle", f)));
+    for (const f of ["config.ts", "config-contract.ts", "entry.ts"]) writeFileSync(join(dir, ".sandcastle", f), readFileSync(join(ROOT, ".sandcastle", f)));
     writeFileSync(join(dir, ".sandcastle", "package.json"), '{"type":"module"}');
     const cfg = structuredClone(EXAMPLE); delete cfg.maxResume; delete cfg.gitIdentity;
     writeFileSync(join(dir, "afk.config.json"), JSON.stringify(cfg));
@@ -171,5 +171,18 @@ test("config.ts reports EVERY missing required key at load, not just the first",
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /maxResume/);
     assert.match(r.stderr, /gitIdentity/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("afk:stop works even when afk.config.json violates the contract (it must not import config.ts)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-stop-"));
+  try {
+    execSync("mkdir -p .sandcastle", { cwd: dir });
+    for (const f of ["stop.ts", "entry.ts", "config.ts", "config-contract.ts"]) writeFileSync(join(dir, ".sandcastle", f), readFileSync(join(ROOT, ".sandcastle", f)));
+    writeFileSync(join(dir, ".sandcastle", "package.json"), '{"type":"module"}');
+    writeFileSync(join(dir, "afk.config.json"), JSON.stringify(without("gitIdentity")));
+    const r = spawnSync(TSX, [join(dir, ".sandcastle", "stop.ts")], { cwd: dir, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(join(dir, ".sandcastle", ".stop-requested")), "the stop sentinel was written");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

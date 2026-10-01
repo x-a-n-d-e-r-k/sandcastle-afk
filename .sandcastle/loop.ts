@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
@@ -12,6 +11,7 @@ import { handleConflict, mechanicalMerge, baseTip, branchContains, type Conflict
 import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
+import { isEntryPoint } from "./entry.js";
 
 const RULES = loadAgentRules();
 // Phases that run long commands also get the liveness rule (#53); triage keeps plain house rules.
@@ -535,5 +535,5 @@ async function main(): Promise<void> {
 
 // Only run the daemon when this module is the process entry point. Importing it — e.g.
 // from the test suite to assert `triageOpts`'s shape — must NOT start the loop.
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) await main();

@@ -1,9 +1,9 @@
-import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, phaseRules, renderPreflight, requireGitIdentity, gitSetupCommand } from "./config.js";
 import * as forge from "./forge-client.js";
 import { implementUiBlock } from "./ui.js";
+import { isEntryPoint } from "./entry.js";
 
 // Single dispatch: implement the next eligible agent-ready issue -> open a PR.
 //   pnpm afk        (loops? no — use `pnpm afk:loop` for continuous)
@@ -52,5 +52,5 @@ async function main(): Promise<void> {
 }
 
 // Only dispatch when run as the entry point — importing (the test suite) must not.
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) await main();

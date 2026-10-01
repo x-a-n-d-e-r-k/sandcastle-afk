@@ -1,5 +1,5 @@
-import { readFileSync, realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { isEntryPoint } from "./entry.js";
 
 // ---------------------------------------------------------------------------
 // The config contract: every afk.config.json key the layer REQUIRES, with its validator (#77).
@@ -86,11 +86,9 @@ export const updateExitCode = (v: ContractViolation[], o: { dry: boolean; force:
 // importing anything that loads config:
 //   tsx config-contract.ts --check <dry-run|apply> <force:0|1> <afk.config.json> [<example.json>]
 //   → stdout: JSON { violations, report, exitCode }  (the process itself always exits 0)
-// Compare REAL paths: import.meta.url is resolved, argv[1] is as-typed. On macOS os.tmpdir() (where
-// afk:update clones a git-URL layer) sits under the /var → /private/var symlink, and a naive
-// comparison made this CLI print nothing — silently skipping the whole check (review of #77).
-const realOrSelf = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
-const isMain = !!process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url));
+// Real-path comparison (entry.ts): afk:update runs this from a clone under os.tmpdir(), which on
+// macOS sits behind the /var → /private/var symlink (review of #77).
+const isMain = isEntryPoint(import.meta.url);
 if (isMain && process.argv[2] === "--check") {
   const [, , , mode, force, cfgPath, examplePath] = process.argv;
   const read = (p?: string): AnyCfg => { try { return p ? JSON.parse(readFileSync(p, "utf8")) : {}; } catch { return {}; } };

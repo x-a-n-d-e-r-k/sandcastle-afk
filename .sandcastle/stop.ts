@@ -1,8 +1,12 @@
 import { existsSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isEntryPoint } from "./entry.js";
 
-import { ROOT, log } from "./config.js";
+// Deliberately NOT importing config.ts: that validates afk.config.json at load (#77), and stopping a
+// running loop must work even when the config is invalid (e.g. right after an `afk:update --force`).
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const log = (m: string) => console.log(`[${new Date().toISOString()}] ${m}`);
 
 // Graceful-stop sentinel: `pnpm afk:stop` writes it; the running loop polls it
 // and exits cleanly after its current step. Gitignored (.sandcastle/.stop-requested).
@@ -42,7 +46,7 @@ export const sleepUnlessStopped = async (
 };
 
 // `pnpm afk:stop` -> `tsx .sandcastle/stop.ts`: request a graceful stop.
-const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) {
   requestStop();
   log(`stop requested — wrote ${STOP_SENTINEL}. The loop will exit after its current step completes.`);

@@ -1,9 +1,9 @@
-import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight } from "./config.js";
 import * as forge from "./forge-client.js";
 import { uiGate, reviewUiBlock } from "./ui.js";
+import { isEntryPoint } from "./entry.js";
 
 // Review one PR/MR:  pnpm afk:review <number>
 
@@ -53,5 +53,5 @@ async function main(): Promise<void> {
 }
 
 // Only review when run as the entry point — importing (the test suite) must not.
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) await main();
