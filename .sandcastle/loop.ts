@@ -4,6 +4,7 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
+import { assertConfigContract } from "./config-contract.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
@@ -236,8 +237,10 @@ async function main(): Promise<void> {
   // Fail fast if the reviewer credential is misplaced (in .env, where it leaks to every
   // sandbox) or missing in internal mode — before any container starts (#32).
   checkReviewCredential();
-  // Same for the commit identity (#52): refuse to start rather than fail every pushing cycle.
-  requireGitIdentity(cfg.gitIdentity);
+  // Every required key the layer declares (#52 gitIdentity, #53 maxResume, …) — the same contract
+  // afk:update checks before installing a layer (#77), so the two can't drift. All violations are
+  // reported at once, rather than fixing one only to hit the next.
+  assertConfigContract(cfg);
   // The merge guard's landed check needs git >= 2.38; refuse to start rather than never merge.
   assertGitSupportsMergeTree(sh("git --version"));
   let lastTriageAt: number | null = null;

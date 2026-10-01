@@ -14,6 +14,15 @@ Many host repos have **no `"type": "module"`** (CommonJS default). `tsx` resolve
 - `bin/forge` must run under **macOS's default bash 3.2**. Guard empty-array expansions with `${arr[@]+"${arr[@]}"}`; don't rely on bash 4+ features.
 - The GitLab (`glab`) paths are best-effort and carry `# VERIFY` notes — validate against a live instance before marking them ✅ in the README matrix.
 
+## Required config keys
+
+A new **required** `afk.config.json` key (no default) needs three things:
+- its validator in `CONFIG_CONTRACT` in `.sandcastle/config-contract.ts`;
+- an example value in `afk.config.example.json`;
+- a placeholder in `scripts/init.ts`.
+
+The loop enforces that list at startup, and `afk:update` checks a consumer's config against it before installing (#77), so a new key is announced at update time instead of crashing `afk:loop`. Prefer an optional key with a default where one is safe (e.g. `labels.orphan`).
+
 ## After changes
 
 `npm run typecheck` (the `.sandcastle` + `scripts` TS) and `bash -n bin/forge`.

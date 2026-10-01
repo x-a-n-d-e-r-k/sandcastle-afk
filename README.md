@@ -64,7 +64,9 @@ pnpm afk:update --base-latest  # also bump @ai-hero/sandcastle to npm's latest
 pnpm afk:update --from ../sandcastle-afk   # sync from a local checkout instead of the default repo
 ```
 
-**Managed vs preserved.** `afk:update` overwrites the files the layer *tracks* under `bin/`, `.sandcastle/`, `skills/`, and `scripts/`, and merges the layer's `afk:*` scripts into your `package.json`. It **never** touches your `afk.config.json`, `.sandcastle/.env*`, the generated `Dockerfile`/`preflight.sh`, or project-only files the layer doesn't ship (e.g. your `.sandcastle/house-rules.md`) — they survive untouched (it does not mirror-delete).
+**Managed vs preserved.** `afk:update` overwrites the files the layer *tracks* under `bin/`, `.sandcastle/`, `skills/`, and `scripts/`, and merges the layer's `afk:*` scripts into your `package.json`. It **never** touches your `afk.config.json`, `.sandcastle/.env*`, the generated `Dockerfile`/`preflight.sh`, or project-only files the layer doesn't ship (e.g. your `.sandcastle/house-rules.md`) — they survive untouched (it does not mirror-delete). It also syncs the root `afk.config.example.json` (documentation of the layer's config, not yours).
+
+**Config contract.** Before installing, `afk:update` runs the incoming layer's own required-key validators (`.sandcastle/config-contract.ts`, the same list the loop enforces at startup) against your `afk.config.json`. `--dry-run` lists any missing or invalid key under "config changes required", with the validator's message and the example value. A real update still installs the files, but ends with a "CONFIG ACTION REQUIRED" block and exits non-zero (`--force` exits 0), because the loop won't start until you fix it.
 
 **Source.** By default it syncs from `https://github.com/x-a-n-d-e-r-k/sandcastle-afk`. Pin a different source with the `layerRepo` field in `afk.config.json`, or override per-run with `--from <git-url|path>`. URLs are shallow-cloned to a temp dir; the synced layer SHA is recorded in `.sandcastle/.layer-sync.json` (gitignored local state).
 
