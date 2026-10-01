@@ -40,9 +40,10 @@ export function shouldRunTriage(
 export function selectUnblockableIssues(
   issues: BlockedIssue[],
   isClosed: (issueNumber: number) => boolean,
+  blockedLabel = "blocked",
 ): number[] {
   return issues
-    .filter((i) => i.labels.includes("blocked"))
+    .filter((i) => i.labels.includes(blockedLabel))
     .filter((i) => {
       const blockers: number[] = parseBlockers(i.body);
       return blockers.length > 0 && blockers.every(isClosed);
@@ -53,20 +54,24 @@ export function selectUnblockableIssues(
 type SweepDeps = {
   listBlocked(): BlockedIssue[];
   isClosed(n: number): boolean;
-  promote(n: number): void;
+  /** Remove the blocked label — and NOTHING else (#78): readiness is not the sweep's to grant. */
+  unblock(n: number): void;
+  blockedLabel?: string;
   hasMarkerComment(n: number): boolean;
   comment(n: number, body: string): void;
 };
 
 // Deterministic blocker-sweep backstop for the event-driven auto-unblock workflow.
-// Promotes every fully-unblocked issue (label flip is self-idempotent) and leaves a
-// single marker comment as the audit trail (guarded so it is never duplicated).
+// Unblocks every issue whose listed blockers have all closed (removing the label is
+// self-idempotent) and leaves a single marker comment as the audit trail (guarded so it is
+// never duplicated). It does NOT add the ready label (#78): an issue that was already ready
+// becomes claimable the moment `blocked` comes off; one that was never judged ready stays out.
 export function sweepBlockedIssues(deps: SweepDeps): number[] {
-  const selected = selectUnblockableIssues(deps.listBlocked(), deps.isClosed);
+  const selected = selectUnblockableIssues(deps.listBlocked(), deps.isClosed, deps.blockedLabel);
   for (const n of selected) {
-    deps.promote(n);
+    deps.unblock(n);
     if (!deps.hasMarkerComment(n)) {
-      deps.comment(n, `${TRIAGE_MARKER} blockers all closed — promoted to agent-ready.`);
+      deps.comment(n, `${TRIAGE_MARKER} unblocked (all blockers closed).`);
     }
   }
   return selected;

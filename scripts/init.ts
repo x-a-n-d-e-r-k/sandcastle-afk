@@ -41,7 +41,7 @@ const cfg = {
   // Required (#52): fill in your implementer bot. Left blank so the loop refuses to start until you do.
   gitIdentity: { name: "", email: "" },
   models: { implement: "claude-sonnet-4-6", review: "claude-opus-4-8", heal: "claude-sonnet-4-6" },
-  labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression", orphan: "afk-orphan" },
+  labels: { ready: "agent-ready", needsFeedback: "needs-feedback", epic: "epic", idea: "idea", needsHuman: "needs-human", e2eRegression: "e2e-regression", orphan: "afk-orphan", blocked: "blocked" },
   maxHeal: 3, maxPipelineRetry: 2, maxResume: 2, flakyJobs: [] as string[],
   priorityLabels: ["highest", "high", "low", "lowest"],
   agentRules: [] as string[],
@@ -115,9 +115,9 @@ if (args.includes("--build")) {
 }
 if (args.includes("--labels")) {
   process.env.FORGE_PLATFORM = C.platform;
-  const colors: Record<string, string> = { ready: "0E8A16", needsFeedback: "FBCA04", epic: "5319E7", idea: "C5DEF5", needsHuman: "B60205", e2eRegression: "D93F0B", orphan: "BFBFBF" };
-  // `orphan` (#61) is optional in older configs; the loop falls back to afk-orphan, so create that.
-  for (const [k, name] of Object.entries({ orphan: "afk-orphan", ...C.labels })) {
+  const colors: Record<string, string> = { ready: "0E8A16", needsFeedback: "FBCA04", epic: "5319E7", idea: "C5DEF5", needsHuman: "B60205", e2eRegression: "D93F0B", orphan: "BFBFBF", blocked: "E99695" };
+  // `orphan` (#61) and `blocked` (#78) are optional in older configs; the loop falls back to these defaults, so create them.
+  for (const [k, name] of Object.entries({ orphan: "afk-orphan", blocked: "blocked", ...C.labels })) {
     try {
       if (C.platform === "github") execSync(`gh label create ${JSON.stringify(name)} --color ${colors[k] ?? "ededed"} --force`, { stdio: "ignore" });
       else execSync(`glab label create --name ${JSON.stringify(name)} --color "#${colors[k] ?? "ededed"}"`, { stdio: "ignore" });
