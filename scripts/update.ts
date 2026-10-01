@@ -144,13 +144,21 @@ try {
   } else if (!existsSync(contractFile)) {
     console.log("This layer has no config contract (.sandcastle/config-contract.ts) — skipping the config check.");
   } else {
+    // Reuse this process's tsx loader flags, but never a debugger flag (port collision).
+    const childArgv = process.execArgv.filter((a) => !/^--inspect/.test(a));
     try {
       contract = JSON.parse(execFileSync(process.execPath, [
-        ...process.execArgv, contractFile, "--check", DRY ? "dry-run" : "apply", FORCE ? "1" : "0",
+        ...childArgv, contractFile, "--check", DRY ? "dry-run" : "apply", FORCE ? "1" : "0",
         consumerCfg, join(layerDir, "afk.config.example.json"),
       ], { encoding: "utf8", cwd: ROOT }));
     } catch (e) {
-      console.warn(`Could not run the layer's config-contract check: ${(e as Error).message.split("\n")[0]}`);
+      // Fail CLOSED: a check that can't run (or prints nothing) must not read as "config is fine".
+      const why = (e as Error).message.split("\n")[0];
+      contract = {
+        violations: [{ key: "(contract check)", message: why }],
+        report: `${DRY ? "[dry-run] config changes required:" : "!!! CONFIG ACTION REQUIRED before `afk:loop`:"}\n  - could not run the layer's config-contract check (${why}). Validate afk.config.json by hand against afk.config.example.json before starting the loop.`,
+        exitCode: DRY || FORCE ? 0 : 1,
+      };
     }
   }
 

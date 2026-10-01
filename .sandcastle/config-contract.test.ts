@@ -120,3 +120,56 @@ test("the CLI is what update runs: JSON with violations, report and exit code", 
     assert.match(out.report, /CONFIG ACTION REQUIRED/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// --- review follow-ups ----------------------------------------------------------------------
+
+test("BLOCKER fix: the check still runs when the layer path goes through a SYMLINK (macOS tmpdir is /var → /private/var)", () => {
+  const c = consumer(without("maxResume"));
+  const link = join(mkdtempSync(join(tmpdir(), "afk-link-")), "layer");
+  try {
+    symlinkSync(ROOT, link);
+    const r = spawnSync(TSX, [join(ROOT, "scripts", "update.ts"), "--from", link, "--dry-run", "--force"], { cwd: c.dir, encoding: "utf8" });
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
+    assert.doesNotMatch(out, /Could not run|could not run/);
+    assert.match(out, /maxResume: afk\.config\.json needs `maxResume`/);
+  } finally { c.cleanup(); rmSync(dirname(link), { recursive: true, force: true }); }
+});
+
+test("a check that can't run is a FAILURE, not a pass: reported in dry-run, exit 1 on apply", () => {
+  // A minimal layer whose contract file throws on load.
+  const layer = mkdtempSync(join(tmpdir(), "afk-badlayer-"));
+  const g = (c: string) => execSync(`git -c user.name=t -c user.email=t@t ${c}`, { cwd: layer, stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } });
+  execSync(`mkdir -p .sandcastle`, { cwd: layer });
+  writeFileSync(join(layer, ".sandcastle", "package.json"), '{"type":"module"}');
+  writeFileSync(join(layer, ".sandcastle", "config-contract.ts"), 'throw new Error("contract module is broken");\n');
+  writeFileSync(join(layer, "package.json"), JSON.stringify({ name: "layer", scripts: {}, dependencies: {} }));
+  writeFileSync(join(layer, "afk.config.example.json"), "{}");
+  g("init -q"); g("add -A"); g("commit -q -m layer");
+  const c = consumer(EXAMPLE);
+  try {
+    const dry = spawnSync(TSX, [join(ROOT, "scripts", "update.ts"), "--from", layer, "--dry-run", "--force"], { cwd: c.dir, encoding: "utf8" });
+    assert.equal(dry.status, 0);
+    assert.match(dry.stdout + dry.stderr, /config changes required[\s\S]*could not run the layer's config-contract check/);
+    if (!loopRunning()) {
+      const apply = spawnSync(TSX, [join(ROOT, "scripts", "update.ts"), "--from", layer], { cwd: c.dir, encoding: "utf8" });
+      assert.equal(apply.status, 1, apply.stdout + apply.stderr);
+      assert.match(apply.stdout + apply.stderr, /CONFIG ACTION REQUIRED/);
+    }
+  } finally { c.cleanup(); rmSync(layer, { recursive: true, force: true }); }
+});
+
+test("config.ts reports EVERY missing required key at load, not just the first", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-cfgload-"));
+  try {
+    execSync("mkdir -p .sandcastle", { cwd: dir });
+    for (const f of ["config.ts", "config-contract.ts"]) writeFileSync(join(dir, ".sandcastle", f), readFileSync(join(ROOT, ".sandcastle", f)));
+    writeFileSync(join(dir, ".sandcastle", "package.json"), '{"type":"module"}');
+    const cfg = structuredClone(EXAMPLE); delete cfg.maxResume; delete cfg.gitIdentity;
+    writeFileSync(join(dir, "afk.config.json"), JSON.stringify(cfg));
+    const r = spawnSync(TSX, [join(dir, ".sandcastle", "config.ts")], { cwd: ROOT, encoding: "utf8" });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /maxResume/);
+    assert.match(r.stderr, /gitIdentity/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

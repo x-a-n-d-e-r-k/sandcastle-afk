@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 // Required-key validators live in config-contract.ts (#77): side-effect free, so afk:update can run
 // them against a consumer's config without importing this module (which throws on a bad config).
-import { assertMaxResume, requireGitIdentity, type GitIdentity } from "./config-contract.js";
+import { assertMaxResume, requireGitIdentity, assertConfigContract, type GitIdentity } from "./config-contract.js";
 export { assertMaxResume, requireGitIdentity, type GitIdentity };
 
 // Repo root, resolved from this file at .sandcastle/config.ts
@@ -129,7 +129,9 @@ export type Cfg = {
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-assertMaxResume(cfg.maxResume);
+// Every required key (#52 gitIdentity, #53 maxResume, …), all violations at once — the same contract
+// afk:update checks before installing a layer (#77), so the two cannot drift.
+assertConfigContract(cfg as unknown as Record<string, unknown>);
 
 // The orphan label (#61). Optional in config so existing consumers keep working after afk:update.
 export const DEFAULT_ORPHAN_LABEL = "afk-orphan";
