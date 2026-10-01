@@ -209,3 +209,11 @@ test("#78: unblocking removes `blocked` only — a ready issue is claimable next
 test("#78: labels.blocked is optional and defaults to 'blocked'", () => {
   assert.equal(BLOCKED_LABEL, "blocked");
 });
+
+test("#78: a `blocked:<x>` sub-label blocks the resume path too (same rule as isExcluded)", async () => {
+  const stale: Issue = { number: 52, title: "dependent", labels: ["agent-ready", "blocked:api", "working:a"] };
+  assert.equal(isExcluded(stale.labels), true);
+  const d = deps({ listReady: () => [stale] });
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, ["remove 52 working:a"]);
+});

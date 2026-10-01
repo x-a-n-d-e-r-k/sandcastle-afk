@@ -96,7 +96,8 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
     // A claim on an issue that is (or became) `blocked` is released, not resumed (#78): holding it
     // only keeps every loop — this one included — off it, and resuming would balk on a missing
     // dependency. With an open PR the claim is PR ownership, so it stays.
-    const isBlocked = (i: Issue) => i.labels.includes(BLOCKED_LABEL);
+    // Same matching rule as isExcluded: `blocked` or a `blocked:<x>` sub-label.
+    const isBlocked = (i: Issue) => i.labels.some((l) => l === BLOCKED_LABEL || l.startsWith(`${BLOCKED_LABEL}:`));
     for (const i of issues.filter((i) => i.labels.includes(mine) && isBlocked(i) && !hasOpenWork(i.number))) {
       if (dry) { log(`DRY: would release own claim on blocked #${i.number}`); continue; }
       log(`#${i.number} is blocked — releasing our claim`);
