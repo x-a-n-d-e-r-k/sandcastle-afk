@@ -76,3 +76,9 @@ test("CHANGES_REQUESTED on the current head → heal; GitLab (no blockingSha) or
   assert.equal(changesRequestedAction({ head: HEAD, blockingSha: "" }), "heal");
   assert.equal(changesRequestedAction(null), "heal");
 });
+
+test("BLOCKER fix: head ALREADY reviewed since an older block (another reviewer's block stands) → escalate, not re-review forever", () => {
+  assert.equal(changesRequestedAction({ head: "c2c2c2c2", blockingSha: "c1c1c1c1", headReviewed: "true" }), "escalate");
+  assert.equal(changesRequestedAction({ head: "c2c2c2c2", blockingSha: "c1c1c1c1", headReviewed: "false" }), "rereview");
+  assert.equal(changesRequestedAction({ head: HEAD, blockingSha: HEAD, headReviewed: "true" }), "heal", "a block on the current head always heals");
+});

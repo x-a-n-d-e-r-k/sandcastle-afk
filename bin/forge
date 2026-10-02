@@ -320,9 +320,11 @@ case "$verb" in
       glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
     fi ;;
 
-  pr-review-gate)  # {head, blockingBody, blockingSha, rebuttal} — the review state the merge gate and re-review need (#81)
+  pr-review-gate)  # {head, blockingBody, blockingSha, rebuttal, headReviewed} — review state for the merge gate and re-review (#81)
     # blockingBody/blockingSha: the LATEST changes-requested review and the commit it was made on.
     # rebuttal: the latest `[afk:rebuttal]` comment posted after that review ("" if none).
+    # headReviewed: "true" if some review was submitted on the CURRENT head after that block — i.e.
+    # re-reviewing again won't change anything (another reviewer's block still stands).
     # GitLab: a changes-requested note carries no commit, so blockingSha is "" there (the
     # same-commit merge backstop is GitHub-only; GitLab keeps its label flow).
     [[ -n "$NUM" ]] || die "pr-review-gate needs <number>"
@@ -333,7 +335,9 @@ case "$verb" in
            blockingBody: ($b.body // ""),
            blockingSha: ($b.commit.oid // ""),
            rebuttal: (if $b == null then "" else
-             ([.comments[] | select((.body | startswith("[afk:rebuttal]")) and (.createdAt > $b.submittedAt))] | last | .body // "") end)}'
+             ([.comments[] | select((.body | startswith("[afk:rebuttal]")) and (.createdAt > $b.submittedAt))] | last | .body // "") end),
+           headReviewed: (if $b == null then "false" else
+             (.headRefOid as $h | [.reviews[] | select((.commit.oid // "") == $h and .submittedAt > $b.submittedAt)] | if length > 0 then "true" else "false" end) end)}'
     else
       mr="$(glab mr view "$NUM" -F json)"
       notes="$(glab mr note list "$NUM" -F json)"
@@ -344,7 +348,8 @@ case "$verb" in
            blockingBody: (($b.body // "") | sub("^\\[forge:changes-requested\\] ?"; "")),
            blockingSha: "",
            rebuttal: (if $b == null then "" else
-             ($all | map(select((.body | startswith("[afk:rebuttal]")) and (.created_at > $b.created_at))) | last | .body // "") end)}'
+             ($all | map(select((.body | startswith("[afk:rebuttal]")) and (.created_at > $b.created_at))) | last | .body // "") end),
+           headReviewed: "false"}'
     fi ;;
 
   pr-heal-count)  # heal ATTEMPTS against the budget: [forge:heal] notes after the last [forge:heal-reset] (#69)

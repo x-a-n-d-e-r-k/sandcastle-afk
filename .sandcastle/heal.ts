@@ -66,7 +66,7 @@ export async function healUntilPushed(pr: number, why: string, d: HealPushDeps):
     const n = d.count();
     if (healDecision(Math.max(n, attempt), d.maxHeal) === "escalate") { d.escalate(Math.max(n, attempt), d.openFinding()); return "escalated"; }
     const before = d.head(), rebuttalsBefore = d.rebuttals();
-    d.log(`PR #${pr} ${why} -> heal ${n + 1}/${d.maxHeal}${note ? " (previous heal pushed nothing)" : ""}`);
+    d.log(`PR #${pr} ${why} -> heal ${Math.max(n, attempt) + 1}/${d.maxHeal}${note ? " (previous heal pushed nothing)" : ""}`);
     d.mark();
     await d.heal(note);
     if (d.head() !== before) { await d.afterPush(); return "pushed"; }

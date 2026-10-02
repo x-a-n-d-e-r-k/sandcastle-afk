@@ -21,7 +21,7 @@
   "pr-merge":                 { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "pr-label":                 { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "pr-comment":               { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
-  "pr-review-gate":           { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["head", "blockingBody", "blockingSha", "rebuttal"] },
+  "pr-review-gate":           { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["head", "blockingBody", "blockingSha", "rebuttal", "headReviewed"] },
   "pr-feedback":              { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
 
   "pr-pipeline":              { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": ["number"],                "jsonFields": ["id", "status"] },

@@ -36,6 +36,15 @@ out="$(GH_JSON="$GH_JSON" f)"
 GH2="$(jq -c '.comments += [{"body":"[afk:rebuttal] it is guarded by test X","createdAt":"2026-10-02T02:15:00Z"}]' <<<"$GH_JSON")"
 [[ "$(GH_JSON="$GH2" f | get rebuttal)" == "[afk:rebuttal] it is guarded by test X" ]] || fail "[github] rebuttal after the block"
 
+# headReviewed: the #2722 timeline has an APPROVED on head b4d0 after the block → "true"
+[[ "$(GH_JSON="$GH_JSON" f | get headReviewed)" == true ]] || fail "[github] a review on the head after the block → headReviewed true"
+# human blocks C1; heal pushes C2; nobody has reviewed C2 yet → "false" (the fix needs its re-review)
+GH3='{"headRefOid":"c2","reviews":[{"state":"CHANGES_REQUESTED","body":"x","submittedAt":"2026-10-02T01:00:00Z","commit":{"oid":"c1"}}],"comments":[]}'
+[[ "$(GH_JSON="$GH3" f | get headReviewed)" == false ]] || fail "[github] head not yet reviewed → false"
+# loop reviewer approved C2, but the human's block on C1 stands → "true" (escalate, don't re-review forever)
+GH4="$(jq -c '.reviews += [{"state":"APPROVED","body":"ok","submittedAt":"2026-10-02T02:00:00Z","commit":{"oid":"c2"}}]' <<<"$GH3")"
+[[ "$(GH_JSON="$GH4" f | get headReviewed)" == true ]] || fail "[github] approved C2 after the C1 block → true"
+
 # never blocked
 [[ "$(GH_JSON='{"headRefOid":"c0","reviews":[],"comments":[]}' f | jq -c '[.blockingBody,.blockingSha,.rebuttal]')" == '["","",""]' ]] || fail "[github] no block → empty fields"
 
@@ -50,5 +59,6 @@ out="$(MR_JSON="$MR_JSON" NOTES_JSON="$NOTES_JSON" f)"
 [[ "$(get blockingBody <<<"$out")" == "deleted the guarding test" ]] || fail "[gitlab] marker stripped (got: $out)"
 [[ "$(get blockingSha <<<"$out")" == "" ]] || fail "[gitlab] notes carry no commit → blockingSha empty"
 [[ "$(get rebuttal <<<"$out")" == "[afk:rebuttal] it is guarded by test X" ]] || fail "[gitlab] rebuttal after the block"
+[[ "$(get headReviewed <<<"$out")" == false ]] || fail "[gitlab] headReviewed is always false (no blockingSha → the loop heals, unchanged)"
 
 echo "PASS: pr-review-gate reports the latest block, its commit (GitHub) and a later rebuttal — GitHub and GitLab"

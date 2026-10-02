@@ -41,6 +41,7 @@ export interface PrReviewGate {
   blockingBody: string;
   blockingSha: string;
   rebuttal: string;
+  headReviewed: string;
 }
 
 export interface PrPipeline {

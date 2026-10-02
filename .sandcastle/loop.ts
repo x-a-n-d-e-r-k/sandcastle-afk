@@ -507,13 +507,20 @@ async function main(): Promise<void> {
             }
           } else if (pr.reviewState === "CHANGES_REQUESTED") {
             const gate = reviewGate(pr.number);
-            if (changesRequestedAction(gate) === "rereview") {
+            const cr = changesRequestedAction(gate);
+            if (cr === "escalate") {
+              // The current head was already reviewed after the block, yet the PR still reads
+              // CHANGES_REQUESTED: another reviewer's block stands. Re-reviewing again would loop.
+              log(`PR #${pr.number}: head ${gate!.head.slice(0, 8)} already reviewed since the block on ${gate!.blockingSha.slice(0, 8)} -> escalating`);
+              escalate(pr.number, `the head (${gate!.head.slice(0, 8)}) was reviewed after the changes-requested review on ${gate!.blockingSha.slice(0, 8)}, but the PR still reads CHANGES_REQUESTED — another reviewer's block is still standing. Still open:\n\n${quote(gate!.blockingBody)}\n\n`);
+              await sleepUnlessStopped(POLL_MS, stopNow);
+            } else if (cr === "rereview") {
               // The block is on an older commit than the head: a pushed fix whose re-review never
               // landed. Review the new head (with the open findings) instead of healing again.
               log(`PR #${pr.number}: blocked on ${gate!.blockingSha.slice(0, 8)}, head is ${gate!.head.slice(0, 8)} -> re-reviewing the new head`);
               forge.prClearChanges(pr.number);
               syncBranch(branch);
-              if (EXTERNAL) log(`#${pr.number} awaiting external re-review.`);
+              if (EXTERNAL) { log(`#${pr.number} awaiting external re-review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
               else await runGuarded(reviewOpts(pr.number, branch, issue, priorFindingsBlock(gate!.blockingBody, gate!.rebuttal)));
             } else {
               await healUntilPushed(pr.number, "CHANGES_REQUESTED",
