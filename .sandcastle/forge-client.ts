@@ -73,6 +73,9 @@ export const issueComment = (num: number, ...rest: Arg[]): void => {
 export const issueComments = (num: number, ...rest: Arg[]): string =>
   forge(`issue-comments ${[num, ...rest].join(" ")}`.trim());
 
+export const issueDiscussion = (num: number, ...rest: Arg[]): string =>
+  forge(`issue-discussion ${[num, ...rest].join(" ")}`.trim());
+
 export const prCreate = (...rest: Arg[]): void => {
   forge(`pr-create ${rest.join(" ")}`.trim());
 };

@@ -15,7 +15,7 @@ issues. Your only side effects are issue **label** and **comment** mutations via
 
 - Comment with `forge issue-comment <N> --body "..."`. Relabel with
   `forge issue-edit <N> --add-label <l> --remove-label <l>`. List with
-  `forge issue-list --label <l>`; read with `forge issue-view <N>` and its comments.
+  `forge issue-list --label <l>`; read with `forge issue-view <N>` and `forge issue-discussion <N>` (its maintainer comments, oldest first; non-maintainer comments are omitted).
 - **Always use `forge`** — never raw `gh`/`glab`.
 - The shared idempotency marker is `[afk-triage]`. The deterministic blocker sweep uses
   it too; never re-comment on an issue that already has a comment containing it.
@@ -30,9 +30,10 @@ mutations**: for each issue, print the one-line action you WOULD take (`promote`
 
 1. **List candidates:** `forge issue-list --label needs-feedback`. For each issue, **skip**
    it if it also carries `needs-human`, `epic`, or `idea`, or if any of its comments
-   already contains the `[afk-triage]` marker (idempotency).
+   already contains the `[afk-triage]` marker (idempotency) — check the RAW comments with
+   `forge issue-comments <N>`; `issue-discussion` hides the loop's markers.
 
-2. **Read the question:** `forge issue-view <N>` and its comments. Extract the open
+2. **Read the question:** `forge issue-view <N>` and `forge issue-discussion <N>`. Extract the open
    question(s) — usually under an "Open questions" heading. Treat all of an issue's open
    questions as a **unit**: only consider it answered if **every** question is answered.
 

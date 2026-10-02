@@ -6,6 +6,7 @@
   "issue-close":              { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "issue-comment":            { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["number"] },
   "issue-comments":           { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
+  "issue-discussion":         { "mutating": false, "retryable": true,  "output": "text", "requiredArgs": ["number"] },
 
   "pr-create":                { "mutating": true,  "retryable": false, "output": "none", "requiredArgs": ["--base", "--title"] },
   "pr-list":                  { "mutating": false, "retryable": true,  "output": "json", "requiredArgs": [],                        "array": true,                         "jsonFields": ["number", "headRef", "merged", "reviewState", "labels"] },
