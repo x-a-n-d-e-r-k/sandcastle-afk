@@ -106,3 +106,11 @@ export const assertGitSupportsMergeTree = (versionOutput: string): void => {
     );
   }
 };
+
+// --- same-commit backstop (#81) ------------------------------------------------------------------
+// Refuse to merge an approval that sits on the very commit a changes-requested review blocked, with
+// nothing pushed since and no rebuttal answering the finding — the "blocked PR merges on the same
+// commit" hole. Cheap, and it catches a regression of the heal/re-review fixes. GitLab notes carry
+// no commit (blockingSha ""), so this never fires there; its label flow is unchanged.
+export const sameCommitAsBlock = (g: { head: string; blockingSha: string; rebuttal: string }): boolean =>
+  !!g.blockingSha && g.blockingSha === g.head && !g.rebuttal.trim();

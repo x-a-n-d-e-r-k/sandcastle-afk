@@ -89,7 +89,7 @@ TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|inte
 
 is_retryable_verb() {
   case "$1" in
-    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-feedback) return 0 ;;
+    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-review-gate|pr-feedback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -320,6 +320,33 @@ case "$verb" in
       glab mr note list "$NUM" -F json 2>/dev/null | jq '[.[].notes[]? | select(.body | startswith("[forge:changes-requested]"))] | length' 2>/dev/null || echo 0
     fi ;;
 
+  pr-review-gate)  # {head, blockingBody, blockingSha, rebuttal} — the review state the merge gate and re-review need (#81)
+    # blockingBody/blockingSha: the LATEST changes-requested review and the commit it was made on.
+    # rebuttal: the latest `[afk:rebuttal]` comment posted after that review ("" if none).
+    # GitLab: a changes-requested note carries no commit, so blockingSha is "" there (the
+    # same-commit merge backstop is GitHub-only; GitLab keeps its label flow).
+    [[ -n "$NUM" ]] || die "pr-review-gate needs <number>"
+    if [[ "$PLATFORM" == github ]]; then
+      gh pr view "$NUM" --json headRefOid,reviews,comments | jq '
+        ([.reviews[] | select(.state == "CHANGES_REQUESTED")] | last) as $b
+        | {head: .headRefOid,
+           blockingBody: ($b.body // ""),
+           blockingSha: ($b.commit.oid // ""),
+           rebuttal: (if $b == null then "" else
+             ([.comments[] | select((.body | startswith("[afk:rebuttal]")) and (.createdAt > $b.submittedAt))] | last | .body // "") end)}'
+    else
+      mr="$(glab mr view "$NUM" -F json)"
+      notes="$(glab mr note list "$NUM" -F json)"
+      jq -n --argjson mr "$mr" --argjson notes "$notes" '
+        [$notes[].notes[]?] | sort_by(.created_at) as $all
+        | ($all | map(select(.body | startswith("[forge:changes-requested]"))) | last) as $b
+        | {head: ($mr.sha // ""),
+           blockingBody: (($b.body // "") | sub("^\\[forge:changes-requested\\] ?"; "")),
+           blockingSha: "",
+           rebuttal: (if $b == null then "" else
+             ($all | map(select((.body | startswith("[afk:rebuttal]")) and (.created_at > $b.created_at))) | last | .body // "") end)}'
+    fi ;;
+
   pr-heal-count)  # heal ATTEMPTS against the budget: [forge:heal] notes after the last [forge:heal-reset] (#69)
     # The budget used to count changes-requested REVIEWS (pr-changes-count), so re-reviews of an
     # unchanged head parked PRs that were never healed, and nothing could reset it.
@@ -340,7 +367,10 @@ case "$verb" in
     [[ -n "$NUM" ]] || die "pr-heal-reset needs <number>"
     if [[ "$PLATFORM" == github ]]; then gh pr comment "$NUM" --body "[forge:heal-reset]"; else glab mr note "$NUM" -m "[forge:heal-reset]"; fi ;;
 
-  pr-clear-changes)  # called after a heal push, to reset the gitlab label
+  pr-clear-changes)  # GitLab ONLY: remove the changes-requested label so the MR reads "needs review" again
+    # GitHub: a no-op — a CHANGES_REQUESTED review stands until a newer review by the same reviewer
+    # supersedes it. The loop calls this only after a VERIFIED new head (or a posted rebuttal), never
+    # merely because a heal ran (#81).
     [[ -n "$NUM" ]] || die "pr-clear-changes needs <number>"
     if [[ "$PLATFORM" == gitlab ]]; then glab mr update "$NUM" --unlabel "$CHANGES_LABEL" 2>/dev/null || true; fi ;;
 

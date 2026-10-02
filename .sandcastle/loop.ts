@@ -8,8 +8,9 @@ import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped }
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
 import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
-import { healWithBudget, type HealDeps } from "./heal.js";
-import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
+import { healUntilPushed, type HealPushDeps } from "./heal.js";
+import { priorFindingsBlock, quote } from "./review-gate.js";
+import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
 
@@ -103,7 +104,7 @@ export const implementOpts = (issue: number, resume = false): RunOptions => ({
     UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT,
   },
 });
-export const reviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const reviewOpts = (pr: number, branch: string, issue: string, prior = ""): RunOptions => ({
   ...baseRun(`review-${pr}`, branch, ".sandcastle/review.md", cfg.models.review, false),
   // The ONLY phase that gets the reviewer credential — this is the harness enforcing the
   // independent-review property, not the prompt (#32). reviewAgentEnv() is {} when the token
@@ -112,14 +113,17 @@ export const reviewOpts = (pr: number, branch: string, issue: string): RunOption
   promptArgs: {
     PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES,
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT,
+    // The previous blocking review the re-review must account for (#81); "" when none.
+    PRIOR_BLOCKING_FINDINGS: prior,
   },
 });
-export const healOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const healOpts = (pr: number, branch: string, issue: string, note = ""): RunOptions => ({
   ...baseRun(`heal-${pr}`, branch, ".sandcastle/heal.md", cfg.models.heal, true),
   // A heal can rewrite UI, invalidating the pre-heal screenshots (they key on the old head
   // SHA now, #35), so the healing agent must know to re-render and re-publish. Empty when the
   // consumer has no `ui` config.
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
+  // HEAL_NOTE: e.g. "your previous heal pushed nothing" (#81); "" on a first attempt.
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT, HEAL_NOTE: note },
 });
 export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
@@ -192,18 +196,40 @@ const issueCloseDeps: IssueCloseDeps = {
   log,
 };
 
-// Live wiring for the heal budget (#69): counts heal ATTEMPTS, not reviews; marked before each run.
-const healBudget = (pr: number, heal: () => Promise<void>): HealDeps => ({
-  maxHeal: MAX_HEAL,
-  count: () => Number(forge.prHealCount(pr)) || 0,
-  mark: () => forge.prHealMark(pr),
-  heal,
-  escalate: (n) => {
-    log(`PR #${pr} heal cap (${n}/${MAX_HEAL} attempts) -> escalating to ${L.needsHuman}`);
-    escalate(pr, `${n} heal attempts did not converge (forge pr-heal-reset ${pr} gives it a fresh budget)`);
-  },
-  log,
-});
+// The review state the re-review and the merge gate need (#81). null when it can't be read.
+const reviewGate = (pr: number) => {
+  try { return forge.prReviewGate(pr); }
+  catch (e) { log(`PR #${pr}: could not read its review state (${(e as Error).message.split("\n")[0]})`); return null; }
+};
+// What a (re-)review must account for: the latest blocking review and any rebuttal of it.
+const priorFor = (pr: number): string => { const g = reviewGate(pr); return g ? priorFindingsBlock(g.blockingBody, g.rebuttal) : ""; };
+
+// A heal must PUSH (or rebut) before the PR is reviewed again (#81); the budget counts ATTEMPTS (#69).
+const healDeps = (pr: number, branch: string, issue: string, finding: () => string): HealPushDeps => {
+  const review = async () => {
+    // The changes-requested label (GitLab) is cleared only now — after a verified push or a rebuttal.
+    forge.prClearChanges(pr);
+    syncBranch(branch);
+    if (EXTERNAL) log(`healed #${pr}; awaiting external re-review.`);
+    else { log(`re-reviewing #${pr}`); await runGuarded(reviewOpts(pr, branch, issue, priorFor(pr))); }
+  };
+  return {
+    maxHeal: MAX_HEAL,
+    count: () => Number(forge.prHealCount(pr)) || 0,
+    mark: () => forge.prHealMark(pr),
+    heal: async (note) => { syncBranch(branch); await runGuarded(healOpts(pr, branch, issue, note)); },
+    head: () => { syncBranch(branch); return headShaOf(branch); },
+    rebuttals: () => (forge.prFeedback(pr).match(/\[afk:rebuttal\]/g) ?? []).length,
+    afterPush: review,
+    afterRebuttal: review,
+    openFinding: finding,
+    escalate: (n, open) => {
+      log(`PR #${pr} heal cap (${n}/${MAX_HEAL} attempts) -> escalating to ${L.needsHuman}`);
+      escalate(pr, `${n} heal attempts did not converge (forge pr-heal-reset ${pr} gives it a fresh budget)${open.trim() ? `. Still open:\n\n${quote(open)}\n\n` : ""}`);
+    },
+    log,
+  };
+};
 
 // After a conflict outcome: a stale flag moves on to the next PR in the same cycle (#68);
 // everything else is this cycle's work.
@@ -373,11 +399,22 @@ async function main(): Promise<void> {
             if (rereview) {
               syncBranch(branch);
               if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
-              else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+              else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue, priorFor(pr.number))); }
             }
           } else if (pr.reviewState === "APPROVED") {
             if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleepUnlessStopped(POLL_MS, stopNow); }
             else {
+              // Same-commit backstop (#81): an approval on the very commit a changes-requested review
+              // blocked — nothing pushed since, no rebuttal — must not merge. Fail closed: if the
+              // review state can't be read, don't merge this cycle.
+              const rg = reviewGate(pr.number);
+              if (!rg) { await sleepUnlessStopped(POLL_MS, stopNow); break prs; }
+              if (sameCommitAsBlock(rg)) {
+                log(`PR #${pr.number} approved on ${rg.head.slice(0, 8)}, the commit a changes-requested review blocked -> refusing to merge`);
+                escalate(pr.number, `approved on ${rg.head.slice(0, 8)} — the same commit a changes-requested review blocked — with nothing pushed since and no rebuttal, so the blocking finding was never addressed. Refusing to merge. Open finding:\n\n${quote(rg.blockingBody)}\n\n`);
+                await sleepUnlessStopped(POLL_MS, stopNow);
+                break prs;
+              }
               // Visual gate (#19). An approval + green pipeline does NOT prove a UI change
               // renders; both agents can honestly believe a broken layout is fine. If the diff
               // touches ui.verifyGlobs and no screenshots were published, refuse to merge and
@@ -457,29 +494,17 @@ async function main(): Promise<void> {
                   forge.prPipelineRetry(pr.number);
                   await sleepUnlessStopped(POLL_MS, stopNow);
                 } else {
-                  await healWithBudget(pr.number, "pipeline failing after retries", healBudget(pr.number, async () => {
-                    syncBranch(branch);
-                    await runGuarded(healOpts(pr.number, branch, issue));
-                    forge.prClearChanges(pr.number);
-                    syncBranch(branch);
-                    log(`re-reviewing #${pr.number}`);
-                    await runGuarded(reviewOpts(pr.number, branch, issue));
-                  }));
+                  await healUntilPushed(pr.number, "pipeline failing after retries",
+                    healDeps(pr.number, branch, issue, () => `the merge pipeline is still failing (${failedJobs.join(", ") || pl.status})`));
                 }
               }
             }
           } else if (pr.reviewState === "CHANGES_REQUESTED") {
-            await healWithBudget(pr.number, "CHANGES_REQUESTED", healBudget(pr.number, async () => {
-              syncBranch(branch);
-              await runGuarded(healOpts(pr.number, branch, issue));
-              forge.prClearChanges(pr.number);
-              syncBranch(branch);
-              if (EXTERNAL) log(`healed #${pr.number}; awaiting external re-review.`);
-              else { log(`re-reviewing #${pr.number}`); await runGuarded(reviewOpts(pr.number, branch, issue)); }
-            }));
+            await healUntilPushed(pr.number, "CHANGES_REQUESTED",
+              healDeps(pr.number, branch, issue, () => reviewGate(pr.number)?.blockingBody ?? ""));
           } else {
             if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
-            else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue)); }
+            else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue, priorFor(pr.number))); }
           }
           break prs; // this PR was this cycle's work
         }

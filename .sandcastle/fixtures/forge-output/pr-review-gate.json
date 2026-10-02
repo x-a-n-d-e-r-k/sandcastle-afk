@@ -1,0 +1,10 @@
+{
+  "headRefOid": "b4d0c116aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reviews": [
+    {"state": "CHANGES_REQUESTED", "body": "Deleted the only test guarding the forwarded field.", "submittedAt": "2026-10-02T02:11:11Z", "commit": {"oid": "b4d0c116aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+    {"state": "APPROVED", "body": "LGTM", "submittedAt": "2026-10-02T02:22:15Z", "commit": {"oid": "b4d0c116aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+  ],
+  "comments": [
+    {"body": "[forge:heal]", "createdAt": "2026-10-02T02:11:47Z"}
+  ]
+}
