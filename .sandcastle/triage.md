@@ -15,7 +15,7 @@ issues. Your only side effects are issue **label** and **comment** mutations via
 
 - Comment with `forge issue-comment <N> --body "..."`. Relabel with
   `forge issue-edit <N> --add-label <l> --remove-label <l>`. List with
-  `forge issue-list --label <l>`; read with `forge issue-view <N>` and `forge issue-discussion <N>` (its human comments, oldest first).
+  `forge issue-list --label <l>`; read with `forge issue-view <N>` and `forge issue-discussion <N>` (its maintainer comments, oldest first; non-maintainer comments are omitted).
 - **Always use `forge`** — never raw `gh`/`glab`.
 - The shared idempotency marker is `[afk-triage]`. The deterministic blocker sweep uses
   it too; never re-comment on an issue that already has a comment containing it.
