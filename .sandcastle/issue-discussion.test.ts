@@ -52,3 +52,23 @@ test("triage reads the discussion but checks its idempotency marker on the RAW c
   assert.match(t, /forge issue-discussion <N>/);
   assert.match(t, /\[afk-triage\][^\n]*\n[^\n]*forge issue-comments <N>/, "marker check must use the raw comments (discussion hides markers)");
 });
+
+test("#84: body says X, a maintainer comment says 'do Y instead' → the implement AND review prompts both carry Y", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-disc84-"));
+  try {
+    // A stub forge that renders what issue-discussion would for that issue.
+    writeFileSync(join(dir, "forge"), "#!/bin/sh\necho '### Comment by @alice on 2026-10-01'\necho\necho 'Decision: do Y instead of X.'\n");
+    chmodSync(join(dir, "forge"), 0o755);
+    for (const p of ["implement.md", "review.md"]) {
+      const out = execFileSync("sh", ["-c", discussionCmd(p)!.replace(/\{\{ISSUE_NUMBER\}\}/g, "2749")],
+        { env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8" });
+      assert.match(out, /Decision: do Y instead of X\./, `${p}: the maintainer's amendment reaches the prompt`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#84: the reviewer judges against the body AS AMENDED and names each maintainer comment it applied", () => {
+  const review = readFileSync(join(ROOT, ".sandcastle", "review.md"), "utf8");
+  assert.match(review, /acceptance criteria \*\*as amended by the maintainer comments above\*\*/);
+  assert.match(review, /name each one you applied/);
+});

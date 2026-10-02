@@ -177,17 +177,20 @@ case "$verb" in
     # by whoever applied the ready label, and comments can come from ANYONE (on a public repo, any
     # account): agents holding push/approve credentials must not take their spec from an outsider. So
     # only trusted authors' comments are shown, and the omitted ones are COUNTED, never hidden silently:
-    #   GitHub: authorAssociation in $FORGE_TRUSTED_ASSOCIATIONS (default OWNER,MEMBER,COLLABORATOR);
-    #           minimized (hidden) comments dropped.
+    #   GitHub: the author's ACTUAL permission on this repo (collaborators/<login>/permission) must be in
+    #           $FORGE_TRUSTED_PERMISSIONS (default admin,maintain,write) — authorAssociation is too loose
+    #           (MEMBER is any org member, COLLABORATOR includes read-only) (#84). Minimized comments dropped.
+    #           At most 25 lookups (newest authors first); authors beyond that are untrusted.
     #   GitLab: the note author's project access level >= $FORGE_TRUSTED_ACCESS_LEVEL (default 30,
     #           Developer); notes are read newest-first (100) via the REST API; system notes dropped.
     #   Both: logins in $FORGE_UNTRUSTED_AUTHORS (comma list, case-insensitive — set it to the loop's own bot accounts) are
     #   never trusted, so an agent can't post an issue comment the independent reviewer reads as spec.
-    # The loop's own markers are dropped; at most the newest 20 comments of <= 3000 chars each are shown.
+    # The loop's own markers and `AFK:` notices are dropped; at most the newest 20 comments of <= 3000
+    # chars each are shown.
     # Fails (and retries) like any read verb; prompts add a visible fallback.
     [[ -n "$NUM" ]] || die "issue-discussion needs <number>"
     disc_defs='
-      def is_marker: test("^\\s*\\[(afk-triage\\]|afk:resume\\]|afk:rebuttal\\]|forge:)");
+      def is_marker: test("^\\s*(\\[(afk-triage\\]|afk:resume\\]|afk:rebuttal\\]|forge:)|AFK:)");
       def clip: if length > 3000 then .[0:3000] + "\n\n…(comment truncated)" else . end;
       def render:
         map(select((.body | length) > 0 and (.body | is_marker | not))) | sort_by(.at) as $all
@@ -200,15 +203,28 @@ case "$verb" in
            end)
         + (if $omitted > 0 then "\n\n(\($omitted) comment(s) from non-maintainers omitted — they are not part of the spec.)" else "" end);'
     if [[ "$PLATFORM" == github ]]; then
-      trusted="${FORGE_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
-      gh issue view "$NUM" --json comments | jq -r --arg trusted "$trusted" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
-        ($trusted | split(",") | map(select(length > 0))) as $tr
+      trusted="${FORGE_TRUSTED_PERMISSIONS:-admin,maintain,write}"
+      comments="$(gh issue view "$NUM" --json comments)"
+      # Each distinct author's permission on THIS repo (newest first, at most 25). A 404 (no such user /
+      # not visible) = untrusted; any other error is an error (fail closed). role_name carries
+      # "maintain"; permission is the legacy admin|write|read|none.
+      perms='{}'; errf="$(mktemp)"
+      for login in $(jq -r '[.comments[]? | .author.login // empty] | reverse | reduce .[] as $l ([]; if index($l) then . else . + [$l] end) | .[0:25] | .[]' <<<"$comments"); do
+        if p="$(gh api "repos/{owner}/{repo}/collaborators/$login/permission" 2>"$errf")"; then
+          role="$(jq -r '(.role_name // .permission // "none") | ascii_downcase' <<<"$p")"
+        elif grep -q "404" "$errf"; then role="none"
+        else cat "$errf" >&2; rm -f "$errf"; exit 1; fi
+        perms="$(jq -c --arg l "$login" --arg r "$role" '. + {($l): $r}' <<<"$perms")"
+      done
+      rm -f "$errf"
+      jq -r --arg trusted "$trusted" --argjson perms "$perms" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
+        ($trusted | ascii_downcase | split(",") | map(select(length > 0))) as $tr
         | ($denied | ascii_downcase | split(",") | map(select(length > 0))) as $deny
         | [.comments[]? | {who: (.author.login // "unknown"), at: (.createdAt // ""), body: (.body // ""),
-                           ok: (((.authorAssociation // "") as $a | $tr | index($a)) != null
+                           ok: (($perms[.author.login // ""] // "none") as $r | ($tr | index($r)) != null
                                 and ((.isMinimized // false) | not)
                                 and ((.author.login // "" | ascii_downcase) as $l | $deny | index($l)) == null)}]
-        | render'
+        | render' <<<"$comments"
     else
       min_level="${FORGE_TRUSTED_ACCESS_LEVEL:-30}"
       issue="$(glab issue view "$NUM" -F json)"
