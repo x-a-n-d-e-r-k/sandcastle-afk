@@ -89,7 +89,7 @@ TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|inte
 
 is_retryable_verb() {
   case "$1" in
-    issue-list|issue-view|issue-comments|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-review-gate|pr-feedback) return 0 ;;
+    issue-list|issue-view|issue-comments|issue-discussion|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-review-gate|pr-feedback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -170,6 +170,23 @@ case "$verb" in
       gh issue view "$NUM" --json comments | jq -r '.comments[]?.body // empty'
     else
       glab issue note list "$NUM" -F json 2>/dev/null | jq -r '.[].notes[]?.body // empty' 2>/dev/null || true
+    fi ;;
+
+  issue-discussion)  # an issue's HUMAN discussion as readable markdown, oldest first — for agent prompts
+    # Comments often refine, extend or amend the body; issue-view carries only the body, so agents
+    # never saw them. The loop's own machine markers ([afk-…], [afk:…], [forge:…]) are noise to an
+    # agent and are dropped, as are GitLab system notes. Fails (and retries) like any read verb;
+    # prompts add a visible fallback so a fetch failure is never mistaken for "no comments".
+    [[ -n "$NUM" ]] || die "issue-discussion needs <number>"
+    render='map(select((.body // "") | test("^\\s*\\[(afk[-:]|forge:)") | not))
+      | if length == 0 then "(no comments)"
+        else map("### Comment by @\(.who) on \(.at[0:10])\n\n\(.body)") | join("\n\n---\n\n") end'
+    if [[ "$PLATFORM" == github ]]; then
+      gh issue view "$NUM" --json comments \
+        | jq -r "[.comments[]? | {who: (.author.login // \"unknown\"), at: (.createdAt // \"\"), body}] | sort_by(.at) | $render"
+    else
+      glab issue note list "$NUM" -F json \
+        | jq -r "[.[].notes[]? | select((.system // false) | not) | {who: (.author.username // \"unknown\"), at: (.created_at // \"\"), body}] | sort_by(.at) | $render"
     fi ;;
 
   # ---------- pull / merge requests ----------
