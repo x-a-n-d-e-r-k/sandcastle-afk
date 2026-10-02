@@ -180,7 +180,9 @@ case "$verb" in
     #   GitHub: the author's ACTUAL permission on this repo (collaborators/<login>/permission) must be in
     #           $FORGE_TRUSTED_PERMISSIONS (default admin,maintain,write) — authorAssociation is too loose
     #           (MEMBER is any org member, COLLABORATOR includes read-only) (#84). Minimized comments dropped.
-    #           At most 25 lookups (newest authors first); authors beyond that are untrusted.
+    #           Trusted if EITHER role_name (e.g. maintain) or the base permission (a custom role that
+    #           inherits write reports permission "write") is listed. At most 15 lookups (newest authors
+    #           first) to stay well inside sandcastle's 30s prompt timeout; the rest are untrusted.
     #   GitLab: the note author's project access level >= $FORGE_TRUSTED_ACCESS_LEVEL (default 30,
     #           Developer); notes are read newest-first (100) via the REST API; system notes dropped.
     #   Both: logins in $FORGE_UNTRUSTED_AUTHORS (comma list, case-insensitive — set it to the loop's own bot accounts) are
@@ -205,23 +207,23 @@ case "$verb" in
     if [[ "$PLATFORM" == github ]]; then
       trusted="${FORGE_TRUSTED_PERMISSIONS:-admin,maintain,write}"
       comments="$(gh issue view "$NUM" --json comments)"
-      # Each distinct author's permission on THIS repo (newest first, at most 25). A 404 (no such user /
+      # Each distinct author's permission on THIS repo (newest first, at most 15). A 404 (no such user /
       # not visible) = untrusted; any other error is an error (fail closed). role_name carries
-      # "maintain"; permission is the legacy admin|write|read|none.
+      # "maintain" or a custom role; permission is the base admin|write|read|none. Both are kept.
       perms='{}'; errf="$(mktemp)"
-      for login in $(jq -r '[.comments[]? | .author.login // empty] | reverse | reduce .[] as $l ([]; if index($l) then . else . + [$l] end) | .[0:25] | .[]' <<<"$comments"); do
+      for login in $(jq -r '[.comments[]? | .author.login // empty] | reverse | reduce .[] as $l ([]; if index($l) then . else . + [$l] end) | .[0:15] | .[]' <<<"$comments"); do
         if p="$(gh api "repos/{owner}/{repo}/collaborators/$login/permission" 2>"$errf")"; then
-          role="$(jq -r '(.role_name // .permission // "none") | ascii_downcase' <<<"$p")"
-        elif grep -q "404" "$errf"; then role="none"
+          roles="$(jq -c '[.role_name, .permission] | map(select(. != null) | ascii_downcase)' <<<"$p")"
+        elif grep -qF "(HTTP 404)" "$errf"; then roles='[]'
         else cat "$errf" >&2; rm -f "$errf"; exit 1; fi
-        perms="$(jq -c --arg l "$login" --arg r "$role" '. + {($l): $r}' <<<"$perms")"
+        perms="$(jq -c --arg l "$login" --argjson r "$roles" '. + {($l): $r}' <<<"$perms")"
       done
       rm -f "$errf"
       jq -r --arg trusted "$trusted" --argjson perms "$perms" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
         ($trusted | ascii_downcase | split(",") | map(select(length > 0))) as $tr
         | ($denied | ascii_downcase | split(",") | map(select(length > 0))) as $deny
         | [.comments[]? | {who: (.author.login // "unknown"), at: (.createdAt // ""), body: (.body // ""),
-                           ok: (($perms[.author.login // ""] // "none") as $r | ($tr | index($r)) != null
+                           ok: (($perms[.author.login // ""] // []) as $r | any($r[]; . as $x | $tr | index($x) != null)
                                 and ((.isMinimized // false) | not)
                                 and ((.author.login // "" | ascii_downcase) as $l | $deny | index($l)) == null)}]
         | render' <<<"$comments"
@@ -231,10 +233,10 @@ case "$verb" in
       pid="$(jq -r '.project_id' <<<"$issue")"; iid="$(jq -r '.iid' <<<"$issue")"
       notes="$(glab api "projects/$pid/issues/$iid/notes?sort=desc&order_by=created_at&per_page=100")"
       # Each human author's access level; 404 = not a member (level 0); any other error is an error.
-      # At most 25 lookups (newest authors first) so a crowded thread stays inside sandcastle's 30s
+      # At most 15 lookups (newest authors first) so a crowded thread stays inside sandcastle's 30s
       # prompt-command timeout; authors beyond that are treated as untrusted (level 0).
       levels='{}'; errf="$(mktemp)"
-      for uid in $(jq -r '[.[] | select((.system // false) | not) | .author.id] | reduce .[] as $i ([]; if index($i) then . else . + [$i] end) | .[0:25] | .[]' <<<"$notes"); do
+      for uid in $(jq -r '[.[] | select((.system // false) | not) | .author.id] | reduce .[] as $i ([]; if index($i) then . else . + [$i] end) | .[0:15] | .[]' <<<"$notes"); do
         if member="$(glab api "projects/$pid/members/all/$uid" 2>"$errf")"; then lvl="$(jq -r '.access_level // 0' <<<"$member")"
         elif grep -q "404" "$errf"; then lvl=0
         else cat "$errf" >&2; rm -f "$errf"; exit 1; fi
