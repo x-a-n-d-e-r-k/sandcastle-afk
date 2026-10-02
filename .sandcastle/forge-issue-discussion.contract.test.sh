@@ -75,6 +75,8 @@ if has "no-assoc comment" "$out"; then fail "[github] 'OWNER,' must not trust a 
 out="$(PAYLOAD="$PAYLOAD" FORGE_UNTRUSTED_AUTHORS=dev-bot,bob f)"
 if has "must stay CSV" "$out"; then fail "[github] FORGE_UNTRUSTED_AUTHORS must exclude bob even as a MEMBER"; fi
 has "only the admin page" "$out" || fail "[github] other maintainers still trusted"
+out="$(PAYLOAD="$PAYLOAD" FORGE_UNTRUSTED_AUTHORS=BOB f)"
+if has "must stay CSV" "$out"; then fail "[github] FORGE_UNTRUSTED_AUTHORS is case-insensitive (BOB excludes bob)"; fi
 
 # empty / markers-only / outsiders-only
 [[ "$(PAYLOAD='{"comments":[]}' f)" == "(no comments)" ]] || fail "[github] no comments → (no comments)"
@@ -115,6 +117,8 @@ if has "[afk-triage]" "$out"; then fail "[gitlab] markers dropped"; fi
 # FORGE_UNTRUSTED_AUTHORS works on GitLab too
 out="$(NOTES="$NOTES" LEVELS="$LEVELS" FORGE_UNTRUSTED_AUTHORS=carol f)"
 if has "Use the v2 endpoint." "$out"; then fail "[gitlab] FORGE_UNTRUSTED_AUTHORS must exclude carol"; fi
+out="$(NOTES="$NOTES" LEVELS="$LEVELS" FORGE_UNTRUSTED_AUTHORS=Carol f)"
+if has "Use the v2 endpoint." "$out"; then fail "[gitlab] FORGE_UNTRUSTED_AUTHORS is case-insensitive (Carol excludes carol)"; fi
 
 # at most 25 member lookups (newest authors first); older authors beyond that count as untrusted
 crowd="$(for i in $(seq 1 30); do jq -nc --argjson i "$i" '{author:{id:(100+$i), username:"u\($i)"}, created_at:("2026-10-01T00:00:" + (if $i < 10 then "0" else "" end) + ($i|tostring) + "Z"), body:("c\($i)"), system:false}'; done | jq -sc 'sort_by(.created_at) | reverse')"

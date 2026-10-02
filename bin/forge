@@ -181,7 +181,7 @@ case "$verb" in
     #           minimized (hidden) comments dropped.
     #   GitLab: the note author's project access level >= $FORGE_TRUSTED_ACCESS_LEVEL (default 30,
     #           Developer); notes are read newest-first (100) via the REST API; system notes dropped.
-    #   Both: logins in $FORGE_UNTRUSTED_AUTHORS (comma list — set it to the loop's own bot accounts) are
+    #   Both: logins in $FORGE_UNTRUSTED_AUTHORS (comma list, case-insensitive — set it to the loop's own bot accounts) are
     #   never trusted, so an agent can't post an issue comment the independent reviewer reads as spec.
     # The loop's own markers are dropped; at most the newest 20 comments of <= 3000 chars each are shown.
     # Fails (and retries) like any read verb; prompts add a visible fallback.
@@ -203,11 +203,11 @@ case "$verb" in
       trusted="${FORGE_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
       gh issue view "$NUM" --json comments | jq -r --arg trusted "$trusted" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
         ($trusted | split(",") | map(select(length > 0))) as $tr
-        | ($denied | split(",") | map(select(length > 0))) as $deny
+        | ($denied | ascii_downcase | split(",") | map(select(length > 0))) as $deny
         | [.comments[]? | {who: (.author.login // "unknown"), at: (.createdAt // ""), body: (.body // ""),
                            ok: (((.authorAssociation // "") as $a | $tr | index($a)) != null
                                 and ((.isMinimized // false) | not)
-                                and ((.author.login // "") as $l | $deny | index($l)) == null)}]
+                                and ((.author.login // "" | ascii_downcase) as $l | $deny | index($l)) == null)}]
         | render'
     else
       min_level="${FORGE_TRUSTED_ACCESS_LEVEL:-30}"
@@ -226,10 +226,10 @@ case "$verb" in
       done
       rm -f "$errf"
       jq -r --argjson levels "$levels" --argjson min "$min_level" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
-        ($denied | split(",") | map(select(length > 0))) as $deny
+        ($denied | ascii_downcase | split(",") | map(select(length > 0))) as $deny
         | [.[] | select((.system // false) | not)
              | {who: (.author.username // "unknown"), at: (.created_at // ""), body: (.body // ""),
-                ok: (($levels[(.author.id | tostring)] // 0) >= $min and ((.author.username // "") as $l | $deny | index($l)) == null)}]
+                ok: (($levels[(.author.id | tostring)] // 0) >= $min and ((.author.username // "" | ascii_downcase) as $l | $deny | index($l)) == null)}]
         | render' <<<"$notes"
     fi ;;
 
