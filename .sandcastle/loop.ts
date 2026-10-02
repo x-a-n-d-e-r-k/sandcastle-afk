@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
@@ -12,6 +11,7 @@ import { handleConflict, mechanicalMerge, baseTip, branchContains, type Conflict
 import { healWithBudget, type HealDeps } from "./heal.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
+import { isEntryPoint } from "./entry.js";
 
 const RULES = loadAgentRules();
 // Phases that run long commands also get the liveness rule (#53); triage keeps plain house rules.
@@ -237,8 +237,6 @@ async function main(): Promise<void> {
   // Fail fast if the reviewer credential is misplaced (in .env, where it leaks to every
   // sandbox) or missing in internal mode — before any container starts (#32).
   checkReviewCredential();
-  // Same for the commit identity (#52): refuse to start rather than fail every pushing cycle.
-  requireGitIdentity(cfg.gitIdentity);
   // The merge guard's landed check needs git >= 2.38; refuse to start rather than never merge.
   assertGitSupportsMergeTree(sh("git --version"));
   let lastTriageAt: number | null = null;
@@ -538,5 +536,5 @@ async function main(): Promise<void> {
 
 // Only run the daemon when this module is the process entry point. Importing it — e.g.
 // from the test suite to assert `triageOpts`'s shape — must NOT start the loop.
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = isEntryPoint(import.meta.url);
 if (isMain) await main();

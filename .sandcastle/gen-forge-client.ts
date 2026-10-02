@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { isEntryPoint } from "./entry.js";
 
 // Generator for .sandcastle/forge-client.ts (#40, epic #30). The client is a TYPED wrapper over
 // config.ts's forge()/forgeJSON(), one function per verb in forge-verbs.json — so a nonexistent
@@ -83,7 +84,7 @@ export const readRegistry = (): Record<string, Desc> =>
   JSON.parse(readFileSync(REGISTRY, "utf8"));
 
 // When run directly, (re)write the client file.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isEntryPoint(import.meta.url)) {
   writeFileSync(OUT, generateClient(readRegistry()));
   console.log(`wrote ${OUT}`);
 }

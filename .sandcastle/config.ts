@@ -2,6 +2,10 @@ import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+// Required-key validators live in config-contract.ts (#77): side-effect free, so afk:update can run
+// them against a consumer's config without importing this module (which throws on a bad config).
+import { assertMaxResume, requireGitIdentity, assertConfigContract, type GitIdentity } from "./config-contract.js";
+export { assertMaxResume, requireGitIdentity, type GitIdentity };
 
 // Repo root, resolved from this file at .sandcastle/config.ts
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -126,22 +130,10 @@ export type Cfg = {
   maxResume: number;
 };
 
-export type GitIdentity = { name: string; email: string };
-
-// Pure so the missing/invalid case is unit-testable; applied to the loaded config just below,
-// so a config without it fails at load rather than on the first killed run (#53).
-export const assertMaxResume = (v: unknown): void => {
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
-    throw new Error(
-      "afk.config.json needs `maxResume` (a non-negative integer, no default): how many times an " +
-      "implement run killed mid-work (e.g. idle timeout) may resume from its checkpoint commit before " +
-      "the issue is escalated to a human. Example: \"maxResume\": 2.",
-    );
-  }
-};
-
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-assertMaxResume(cfg.maxResume);
+// Every required key (#52 gitIdentity, #53 maxResume, …), all violations at once — the same contract
+// afk:update checks before installing a layer (#77), so the two cannot drift.
+assertConfigContract(cfg as unknown as Record<string, unknown>);
 
 // The orphan label (#61). Optional in config so existing consumers keep working after afk:update.
 export const DEFAULT_ORPHAN_LABEL = "afk-orphan";
@@ -152,20 +144,6 @@ export const ORPHAN_LABEL = cfg.labels.orphan ?? DEFAULT_ORPHAN_LABEL;
 // Optional in config so existing consumers keep working after afk:update.
 export const DEFAULT_BLOCKED_LABEL = "blocked";
 export const BLOCKED_LABEL = cfg.labels.blocked ?? DEFAULT_BLOCKED_LABEL;
-
-// Pure validator for `gitIdentity` (#52). No default on purpose: a silent fallback to the host
-// clone's identity is exactly the drift this exists to stop. Throws naming the key to set.
-export const requireGitIdentity = (id: Partial<GitIdentity> | undefined): GitIdentity => {
-  const name = id?.name?.trim(), email = id?.email?.trim();
-  if (!name || !email) {
-    throw new Error(
-      'afk.config.json needs `gitIdentity: { "name": "...", "email": "..." }` — the single git author ' +
-      "for every pushing phase (implement, heal, resolve). Use your implementer bot account, e.g. " +
-      '{ "name": "my-dev-bot", "email": "my-dev-bot@users.noreply.github.com" }.',
-    );
-  }
-  return { name, email };
-};
 
 // Single-quote a value for a POSIX shell command line.
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;

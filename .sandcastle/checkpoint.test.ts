@@ -172,6 +172,8 @@ test("config.ts itself refuses to load a config without maxResume", () => {
   try {
     mkdirSync(join(dir, ".sandcastle"));
     copyFileSync(join(ROOT, ".sandcastle", "config.ts"), join(dir, ".sandcastle", "config.ts"));
+    copyFileSync(join(ROOT, ".sandcastle", "config-contract.ts"), join(dir, ".sandcastle", "config-contract.ts")); // its validators (#77)
+    copyFileSync(join(ROOT, ".sandcastle", "entry.ts"), join(dir, ".sandcastle", "entry.ts"));
     writeFileSync(join(dir, ".sandcastle", "package.json"), '{"type":"module"}');
     const example = JSON.parse(execSync(`cat ${JSON.stringify(join(ROOT, "afk.config.example.json"))}`, { encoding: "utf8" }));
     delete example.maxResume;

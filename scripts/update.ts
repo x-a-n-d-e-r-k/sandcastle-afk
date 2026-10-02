@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, statSync, chmodSync, rmSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -36,6 +36,9 @@ const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 // files and secrets are never layer-tracked, so they're already excluded — the
 // explicit skip-list below is defense-in-depth.
 const MANAGED_DIRS = ["bin/", ".sandcastle/", "skills/", "scripts/"];
+// Single root-level files the layer owns. The example config is documentation of the layer's config
+// contract, not the consumer's config — a stale copy hid new required keys (#77).
+const MANAGED_FILES = new Set(["afk.config.example.json"]);
 const SKIP_FILES = new Set([
   "afk.config.json",
   ".sandcastle/.env",
@@ -88,7 +91,7 @@ try {
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
-    .filter((rel) => MANAGED_DIRS.some((d) => rel.startsWith(d)))
+    .filter((rel) => MANAGED_DIRS.some((d) => rel.startsWith(d)) || MANAGED_FILES.has(rel))
     .filter((rel) => !isSkipped(rel));
 
   const sameFile = (a: string, b: string) => {
@@ -128,6 +131,37 @@ try {
   const projScripts: Record<string, string> = projectPkg.scripts ?? {};
   const scriptChanges = Object.entries(afkScripts).filter(([k, v]) => projScripts[k] !== v);
 
+  // ---- 5b. config contract (#77) -------------------------------------------
+  // Would THIS layer accept the consumer's afk.config.json? Run the layer's own validators (its
+  // config-contract.ts, in a child process reusing this process's tsx loader) — the same list the
+  // loop enforces at startup — so a new required key is reported here, not as a crash at
+  // `afk:loop`. Layers predating the contract file are skipped with a note.
+  const contractFile = join(layerDir, ".sandcastle", "config-contract.ts");
+  const consumerCfg = join(ROOT, "afk.config.json");
+  let contract: { violations: unknown[]; report: string; exitCode: number } | null = null;
+  if (!existsSync(consumerCfg)) {
+    console.log("No afk.config.json yet — skipping the config-contract check (run `pnpm afk:init`).");
+  } else if (!existsSync(contractFile)) {
+    console.log("This layer has no config contract (.sandcastle/config-contract.ts) — skipping the config check.");
+  } else {
+    // Reuse this process's tsx loader flags, but never a debugger flag (port collision).
+    const childArgv = process.execArgv.filter((a) => !/^--inspect/.test(a));
+    try {
+      contract = JSON.parse(execFileSync(process.execPath, [
+        ...childArgv, contractFile, "--check", DRY ? "dry-run" : "apply", FORCE ? "1" : "0",
+        consumerCfg, join(layerDir, "afk.config.example.json"),
+      ], { encoding: "utf8", cwd: ROOT }));
+    } catch (e) {
+      // Fail CLOSED: a check that can't run (or prints nothing) must not read as "config is fine".
+      const why = (e as Error).message.split("\n")[0];
+      contract = {
+        violations: [{ key: "(contract check)", message: why }],
+        report: `${DRY ? "[dry-run] config changes required:" : "!!! CONFIG ACTION REQUIRED before `afk:loop`:"}\n  - could not run the layer's config-contract check (${why}). Validate afk.config.json by hand against afk.config.example.json before starting the loop.`,
+        exitCode: DRY || FORCE ? 0 : 1,
+      };
+    }
+  }
+
   // ---- DRY RUN: report, write nothing --------------------------------------
   if (DRY) {
     console.log(`\n[dry-run] layer source: ${sourceUrl}`);
@@ -138,7 +172,10 @@ try {
     console.log(`\n[dry-run] base @ai-hero/sandcastle: ${currentBase} -> ${targetBase || "(unchanged)"}${baseChanges ? "" : " (no change)"}`);
     console.log(`[dry-run] afk:* script changes: ${scriptChanges.length}`);
     for (const [k, v] of scriptChanges) console.log(`  ~ ${k}: ${projScripts[k] ?? "(new)"} -> ${v}`);
+    if (contract?.report) console.log(`\n${contract.report}`);
+    else if (contract) console.log("\n[dry-run] config: your afk.config.json satisfies this layer's contract.");
     console.log("\n[dry-run] nothing written.");
+    cleanup?.(); // process.exit skips the finally below
     process.exit(0);
   }
 
@@ -215,6 +252,12 @@ try {
   console.log("  1. review `git diff`");
   if (baseChanges) console.log("  2. `pnpm install --frozen-lockfile`  (the base version changed — do this while the loop is STOPPED)");
   console.log(`  ${baseChanges ? 3 : 2}. \`pnpm afk:stop && pnpm afk:loop\``);
+  if (contract?.report) {
+    // Loud and last: the files are installed, but the loop will refuse to start until this is fixed.
+    console.error(`\n${contract.report}`);
+    if (contract.exitCode) console.error("\nFix afk.config.json (see afk.config.example.json), then start the loop. (--force exits 0.)");
+  }
+  process.exitCode = contract?.exitCode ?? 0;
 } finally {
   cleanup?.();
 }
