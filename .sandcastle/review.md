@@ -35,7 +35,7 @@ You are checked out on the PR branch.
 1. **Verify, don't trust.** Independently run the preflight commands below and record the ACTUAL result — do not rely on the author's claims.
 
 {{PREFLIGHT}}
-2. **Review** against the linked issue's acceptance criteria, and for correctness, edge cases, and conventions. Critically, confirm the tests genuinely exercise the behavior and are not vacuous (would they fail under a plausible wrong implementation?).
+2. **Review** against the linked issue's acceptance criteria **as amended by the maintainer comments above** (if any — in your review body, name each one you applied, e.g. "applied @alice's 2026-10-01 comment: CSV only"), and for correctness, edge cases, and conventions. Critically, confirm the tests genuinely exercise the behavior and are not vacuous (would they fail under a plausible wrong implementation?).
 3. **Decide and post the review as the reviewer identity** (the `--as-reviewer` flag ensures it is NOT attributed to the author):
    - If preflight passes AND the change is correct and well-tested:
      `forge pr-approve {{PR_NUMBER}} --as-reviewer --body "<concise summary of exactly what you ran and verified>"`
