@@ -31,7 +31,8 @@
     "idea": "idea",
     "needsHuman": "needs-human",
     "e2eRegression": "e2e-regression",
-    "orphan": "afk-orphan"
+    "orphan": "afk-orphan",
+    "blocked": "blocked"
   },
   "maxHeal": 3,
   "maxPipelineRetry": 2,

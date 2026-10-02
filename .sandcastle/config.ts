@@ -86,6 +86,8 @@ export type Cfg = {
     e2eRegression: string;
     /** Marks a closed PR whose source branch never existed on origin (#61). Default "afk-orphan". */
     orphan?: string;
+    /** "Not now": a blocked issue is never claimable, whatever its other labels (#78). Default "blocked". */
+    blocked?: string;
   };
   maxHeal: number;
   maxPipelineRetry: number;
@@ -144,6 +146,12 @@ assertMaxResume(cfg.maxResume);
 // The orphan label (#61). Optional in config so existing consumers keep working after afk:update.
 export const DEFAULT_ORPHAN_LABEL = "afk-orphan";
 export const ORPHAN_LABEL = cfg.labels.orphan ?? DEFAULT_ORPHAN_LABEL;
+
+// The blocked label (#78). `ready` means "specified well enough"; `blocked` means "not now", and
+// is excluded from pickup by itself, so readiness no longer has to be withheld until blockers close.
+// Optional in config so existing consumers keep working after afk:update.
+export const DEFAULT_BLOCKED_LABEL = "blocked";
+export const BLOCKED_LABEL = cfg.labels.blocked ?? DEFAULT_BLOCKED_LABEL;
 
 // Pure validator for `gitIdentity` (#52). No default on purpose: a silent fallback to the host
 // clone's identity is exactly the drift this exists to stop. Throws naming the key to set.
@@ -369,6 +377,6 @@ export const renderPreflight = (cmds: string[]): string => {
 
 // `working` is included so a claimed issue (`working` or any `working:<id>` sub-label) is
 // skipped on fresh pickup — its owning loop resumes it via the claim path, not here.
-export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman, WORKING];
+export const EXCLUDE_LABELS = [cfg.labels.epic, cfg.labels.idea, cfg.labels.needsFeedback, cfg.labels.needsHuman, WORKING, BLOCKED_LABEL];
 export const isExcluded = (labels: string[]) =>
   labels.some((l) => EXCLUDE_LABELS.some((x) => l === x || l.startsWith(`${x}:`)));

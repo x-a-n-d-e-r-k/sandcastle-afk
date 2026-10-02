@@ -152,3 +152,68 @@ test("merged: an own-claimed ready issue whose only PR merged is NOT resumed and
   assert.equal(await pickNextIssue([], deps({ listReady: () => [claimed], listClosed: () => [merged] })), undefined);
   assert.equal(await pickNextIssue([], deps({ listReady: () => [unclaimed], listClosed: () => [merged], mine: "", loopId: "" })), undefined);
 });
+
+// --- `blocked` makes an issue unclaimable (#78) --------------------------------------------------
+// A tiny in-memory forge: issues with labels; listReady filters by the ready label like the real one;
+// the sweep's unblock removes `blocked` and nothing else (the real wiring in loop.ts).
+const { sweepBlockedIssues } = await import("./triage.js");
+const { BLOCKED_LABEL } = await import("./config.js");
+
+test("#78: an agent-ready + blocked issue is never claimed (candidate path)", async () => {
+  const ready: Issue = { number: 50, title: "dependent", labels: ["agent-ready", "blocked"] };
+  const free: Issue = { number: 51, title: "free", labels: ["agent-ready"] };
+  assert.equal(isExcluded(ready.labels), true);
+  const picked = await pickNextIssue([], deps({ listReady: () => [ready, free], mine: "", loopId: "" }));
+  assert.equal(picked?.number, 51, "the genuinely unblocked issue is picked, not the blocked one");
+  assert.equal(await pickNextIssue([], deps({ listReady: () => [ready], mine: "", loopId: "" })), undefined);
+});
+
+test("#78: a stale own claim on an agent-ready + blocked issue is released and not worked", async () => {
+  const stale: Issue = { number: 50, title: "dependent", labels: ["agent-ready", "blocked", "working:a"] };
+  const d = deps({ listReady: () => [stale] }); // view() throws if a fresh claim is attempted
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, ["remove 50 working:a"]);
+});
+
+test("#78: a blocked own claim WITH an open PR keeps its claim (it is PR ownership)", async () => {
+  const withPr: Issue = { number: 50, title: "dependent", labels: ["agent-ready", "blocked", "working:a"] };
+  const d = deps({ listReady: () => [withPr] });
+  await pickNextIssue([{ headRef: "agent/issue-50" }], d);
+  assert.deepEqual(d.edits, []);
+});
+
+test("#78: dry-run never releases a claim", async () => {
+  const stale: Issue = { number: 50, title: "dependent", labels: ["agent-ready", "blocked", "working:a"] };
+  const d = deps({ listReady: () => [stale], dry: true });
+  await pickNextIssue([], d);
+  assert.deepEqual(d.edits, []);
+});
+
+test("#78: unblocking removes `blocked` only — a ready issue is claimable next poll; a never-ready one is not", async () => {
+  const forgeIssues: Issue[] = [
+    { number: 60, title: "ready+blocked", labels: ["agent-ready", BLOCKED_LABEL] },
+    { number: 61, title: "blocked only", labels: [BLOCKED_LABEL] },
+  ];
+  const listReady = () => forgeIssues.filter((i) => i.labels.includes("agent-ready"));
+  assert.equal(await pickNextIssue([], deps({ listReady, mine: "", loopId: "" })), undefined, "nothing claimable while blocked");
+  sweepBlockedIssues({
+    listBlocked: () => forgeIssues.map((i) => ({ ...i, body: "<!-- blocker-deps: #5 -->" })),
+    isClosed: () => true,
+    unblock: (n) => { const i = forgeIssues.find((x) => x.number === n)!; i.labels = i.labels.filter((l) => l !== BLOCKED_LABEL); },
+    hasMarkerComment: () => true, comment: () => {}, blockedLabel: BLOCKED_LABEL,
+  });
+  assert.deepEqual(forgeIssues.map((i) => i.labels), [["agent-ready"], []], "agent-ready untouched; never added");
+  assert.equal((await pickNextIssue([], deps({ listReady, mine: "", loopId: "" })))?.number, 60);
+});
+
+test("#78: labels.blocked is optional and defaults to 'blocked'", () => {
+  assert.equal(BLOCKED_LABEL, "blocked");
+});
+
+test("#78: a `blocked:<x>` sub-label blocks the resume path too (same rule as isExcluded)", async () => {
+  const stale: Issue = { number: 52, title: "dependent", labels: ["agent-ready", "blocked:api", "working:a"] };
+  assert.equal(isExcluded(stale.labels), true);
+  const d = deps({ listReady: () => [stale] });
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, ["remove 52 working:a"]);
+});

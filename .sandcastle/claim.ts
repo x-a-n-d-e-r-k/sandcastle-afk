@@ -8,7 +8,7 @@
 // This lives apart from loop.ts (which imports @ai-hero/sandcastle) on purpose: the
 // claim logic stays unit-testable with no sandbox runtime and no live forge — the deps
 // `pickNextIssue` needs are injected (realPickDeps wires the live ones).
-import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL } from "./config.js";
+import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
 import * as forge from "./forge-client.js";
 
 export type Issue = { number: number; title: string; labels: string[] };
@@ -93,8 +93,18 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
   // excluded). Resume our OWN claim before taking anything new — bypassing isExcluded —
   // else the issue is stranded forever. No write: it's already claimed by us.
   if (mine) {
+    // A claim on an issue that is (or became) `blocked` is released, not resumed (#78): holding it
+    // only keeps every loop — this one included — off it, and resuming would balk on a missing
+    // dependency. With an open PR the claim is PR ownership, so it stays.
+    // Same matching rule as isExcluded: `blocked` or a `blocked:<x>` sub-label.
+    const isBlocked = (i: Issue) => i.labels.some((l) => l === BLOCKED_LABEL || l.startsWith(`${BLOCKED_LABEL}:`));
+    for (const i of issues.filter((i) => i.labels.includes(mine) && isBlocked(i) && !hasOpenWork(i.number))) {
+      if (dry) { log(`DRY: would release own claim on blocked #${i.number}`); continue; }
+      log(`#${i.number} is blocked — releasing our claim`);
+      removeLabel(i.number, mine);
+    }
     const resume = issues
-      .filter((i) => i.labels.includes(mine) && !hasOpenWork(i.number))
+      .filter((i) => i.labels.includes(mine) && !isBlocked(i) && !hasOpenWork(i.number))
       .sort(byPriority)[0];
     if (resume) { log(`resuming own claim #${resume.number}`); return resume; }
   }

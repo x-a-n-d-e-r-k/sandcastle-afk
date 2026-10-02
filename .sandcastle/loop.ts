@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -219,17 +219,18 @@ function escalate(pr: number, reason: string) {
 // loop runs (concurrency=1) so it never races a live container. issue-list omits body,
 // so we issue-view each blocked issue (and each blocker) for body + closed-state.
 function runTriageSweep() {
-  const blockedNums = forge.issueList("--label", "blocked").map((i) => i.number);
+  const blockedNums = forge.issueList("--label", BLOCKED_LABEL).map((i) => i.number);
   type Detail = { number: number; body?: string; labels: string[]; state: string };
   const detail = (n: number): Detail => forge.issueView(n);
   const promoted = sweepBlockedIssues({
     listBlocked: () => blockedNums.map(detail),
     isClosed: (n) => isIssueClosed(detail(n)),
-    promote: (n) => { forge.issueEdit(n, "--add-label", L.ready, "--remove-label", "blocked"); },
+    unblock: (n) => { forge.issueEdit(n, "--remove-label", BLOCKED_LABEL); },
+    blockedLabel: BLOCKED_LABEL,
     hasMarkerComment: (n) => forge.issueComments(n).includes(TRIAGE_MARKER),
     comment: (n, body) => { forge.issueComment(n, "--body", JSON.stringify(body)); },
   });
-  if (promoted.length) log(`triage: promoted ${promoted.length} unblocked issue(s): ${promoted.join(", ")}`);
+  if (promoted.length) log(`triage: unblocked ${promoted.length} issue(s) (all blockers closed): ${promoted.join(", ")}`);
 }
 
 async function main(): Promise<void> {
