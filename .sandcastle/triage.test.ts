@@ -30,18 +30,26 @@ test("regression: with forge's old shape (no `state`), nothing is selected — t
   assert.deepEqual(selectUnblockableIssues([blocked], (n) => isIssueClosed(detail[n])), []);
 });
 
-test("sweepBlockedIssues promotes a fully-closed-blocker issue through the real check", () => {
+test("sweepBlockedIssues unblocks a fully-closed-blocker issue through the real check", () => {
   const detail: Record<number, { state?: string }> = { 5: { state: "closed" } };
-  const promoted: number[] = [];
+  const unblocked: number[] = [];
   const comments: Array<[number, string]> = [];
   const result = sweepBlockedIssues({
     listBlocked: () => [blocked],
     isClosed: (n) => isIssueClosed(detail[n]),
-    promote: (n) => { promoted.push(n); },
+    unblock: (n) => { unblocked.push(n); },
     hasMarkerComment: () => false,
     comment: (n, body) => { comments.push([n, body]); },
   });
   assert.deepEqual(result, [10]);
-  assert.deepEqual(promoted, [10]);
+  assert.deepEqual(unblocked, [10]);
   assert.equal(comments.length, 1);
+  assert.match(comments[0][1], /unblocked \(all blockers closed\)/);
+  assert.doesNotMatch(comments[0][1], /promoted to agent-ready/);
+});
+
+test("#78: a configured blocked label name is honoured by selection", () => {
+  const custom = { number: 11, body: "<!-- blocker-deps: #5 -->", labels: ["on-hold"] };
+  assert.deepEqual(selectUnblockableIssues([custom], () => true, "on-hold"), [11]);
+  assert.deepEqual(selectUnblockableIssues([custom], () => true), [], "default label is 'blocked'");
 });

@@ -51,7 +51,7 @@ The reviewer must be a **different account** than the implementer so its approva
 ## 6. Labels
 
 ```bash
-npm run afk:init -- --labels    # creates agent-ready, needs-feedback, epic, idea, needs-human, e2e-regression
+npm run afk:init -- --labels    # creates agent-ready, needs-feedback, epic, idea, needs-human, e2e-regression, blocked, afk-orphan
 ```
 
 ## 7. Smoke test (one throwaway issue)
@@ -72,7 +72,7 @@ If that round-trips cleanly, you're done.
 caffeinate -i npm run afk:loop   # keep the machine awake; Ctrl-C to stop
 ```
 
-Feed it `agent-ready` issues; it works one at a time. A PR that fails to converge after `maxHeal` heals gets the `needs-human` label and is parked.
+Feed it `agent-ready` issues; it works one at a time. Dependent issues get `agent-ready` + `blocked` (with a `<!-- blocker-deps: #N -->` marker); `blocked` keeps the loop off until the blockers close. A PR that fails to converge after `maxHeal` heals gets the `needs-human` label and is parked.
 
 ## External review mode (`reviewMode: "external"`)
 
