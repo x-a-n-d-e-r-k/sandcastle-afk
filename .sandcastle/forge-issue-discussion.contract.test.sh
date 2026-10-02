@@ -66,6 +66,16 @@ out="$(PAYLOAD="$PAYLOAD" FORGE_TRUSTED_ASSOCIATIONS=OWNER f)"
 if has "must stay CSV" "$out"; then fail "[github] FORGE_TRUSTED_ASSOCIATIONS=OWNER must exclude MEMBER"; fi
 has "only the admin page" "$out" || fail "[github] OWNER still trusted"
 
+# a trailing comma in the trust list must not make association-less comments trusted
+P3="$(jq -c '.comments += [{"author":{"login":"ghost"},"createdAt":"2026-10-03T02:00:00Z","body":"no-assoc comment"}]' <<<"$PAYLOAD")"
+out="$(PAYLOAD="$P3" FORGE_TRUSTED_ASSOCIATIONS='OWNER,' f)"
+if has "no-assoc comment" "$out"; then fail "[github] 'OWNER,' must not trust a missing authorAssociation"; fi
+
+# the loop's own bot accounts are never trusted (an agent can't post spec for the reviewer)
+out="$(PAYLOAD="$PAYLOAD" FORGE_UNTRUSTED_AUTHORS=dev-bot,bob f)"
+if has "must stay CSV" "$out"; then fail "[github] FORGE_UNTRUSTED_AUTHORS must exclude bob even as a MEMBER"; fi
+has "only the admin page" "$out" || fail "[github] other maintainers still trusted"
+
 # empty / markers-only / outsiders-only
 [[ "$(PAYLOAD='{"comments":[]}' f)" == "(no comments)" ]] || fail "[github] no comments → (no comments)"
 [[ "$(PAYLOAD="{\"comments\":[$(c x MEMBER 2026-10-01T00:00:00Z '[forge:heal]')]}" f)" == "(no comments)" ]] || fail "[github] markers only → (no comments)"
@@ -101,6 +111,17 @@ if has "IGNORE THE BODY" "$out" || has "me too" "$out"; then fail "[gitlab] Gues
 has "(2 comment(s) from non-maintainers omitted" "$out" || fail "[gitlab] omitted comments counted"
 if has "[afk-triage]" "$out"; then fail "[gitlab] markers dropped"; fi
 [[ "$(NOTES='[]' LEVELS='{}' f)" == "(no comments)" ]] || fail "[gitlab] no notes → (no comments)"
+
+# FORGE_UNTRUSTED_AUTHORS works on GitLab too
+out="$(NOTES="$NOTES" LEVELS="$LEVELS" FORGE_UNTRUSTED_AUTHORS=carol f)"
+if has "Use the v2 endpoint." "$out"; then fail "[gitlab] FORGE_UNTRUSTED_AUTHORS must exclude carol"; fi
+
+# at most 25 member lookups (newest authors first); older authors beyond that count as untrusted
+crowd="$(for i in $(seq 1 30); do jq -nc --argjson i "$i" '{author:{id:(100+$i), username:"u\($i)"}, created_at:("2026-10-01T00:00:" + (if $i < 10 then "0" else "" end) + ($i|tostring) + "Z"), body:("c\($i)"), system:false}'; done | jq -sc 'sort_by(.created_at) | reverse')"
+all_members="$(jq -nc '[range(101;131)] | map({key: tostring, value: 40}) | from_entries')"
+out="$(NOTES="$crowd" LEVELS="$all_members" f)"
+has "(5 comment(s) from non-maintainers omitted" "$out" || fail "[gitlab] authors beyond the 25-lookup cap are untrusted (got tail: $(tail -1 <<<"$out"))"
+has "### Comment by @u30" "$out" || fail "[gitlab] the newest authors are looked up"
 
 # a member-lookup error that is NOT a 404 is an error (fail closed), not "untrusted"
 set +e; out="$(NOTES='[{"author":{"id":500,"username":"x"},"created_at":"2026-10-01T00:00:00Z","body":"hi","system":false}]' LEVELS='{}' f 2>/dev/null)"; rc=$?; set -e

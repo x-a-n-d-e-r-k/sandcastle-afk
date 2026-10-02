@@ -181,6 +181,8 @@ case "$verb" in
     #           minimized (hidden) comments dropped.
     #   GitLab: the note author's project access level >= $FORGE_TRUSTED_ACCESS_LEVEL (default 30,
     #           Developer); notes are read newest-first (100) via the REST API; system notes dropped.
+    #   Both: logins in $FORGE_UNTRUSTED_AUTHORS (comma list — set it to the loop's own bot accounts) are
+    #   never trusted, so an agent can't post an issue comment the independent reviewer reads as spec.
     # The loop's own markers are dropped; at most the newest 20 comments of <= 3000 chars each are shown.
     # Fails (and retries) like any read verb; prompts add a visible fallback.
     [[ -n "$NUM" ]] || die "issue-discussion needs <number>"
@@ -199,10 +201,13 @@ case "$verb" in
         + (if $omitted > 0 then "\n\n(\($omitted) comment(s) from non-maintainers omitted — they are not part of the spec.)" else "" end);'
     if [[ "$PLATFORM" == github ]]; then
       trusted="${FORGE_TRUSTED_ASSOCIATIONS:-OWNER,MEMBER,COLLABORATOR}"
-      gh issue view "$NUM" --json comments | jq -r --arg trusted "$trusted" "$disc_defs"'
-        ($trusted | split(",")) as $tr
+      gh issue view "$NUM" --json comments | jq -r --arg trusted "$trusted" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
+        ($trusted | split(",") | map(select(length > 0))) as $tr
+        | ($denied | split(",") | map(select(length > 0))) as $deny
         | [.comments[]? | {who: (.author.login // "unknown"), at: (.createdAt // ""), body: (.body // ""),
-                           ok: (((.authorAssociation // "") as $a | $tr | index($a)) != null and ((.isMinimized // false) | not))}]
+                           ok: (((.authorAssociation // "") as $a | $tr | index($a)) != null
+                                and ((.isMinimized // false) | not)
+                                and ((.author.login // "") as $l | $deny | index($l)) == null)}]
         | render'
     else
       min_level="${FORGE_TRUSTED_ACCESS_LEVEL:-30}"
@@ -210,18 +215,21 @@ case "$verb" in
       pid="$(jq -r '.project_id' <<<"$issue")"; iid="$(jq -r '.iid' <<<"$issue")"
       notes="$(glab api "projects/$pid/issues/$iid/notes?sort=desc&order_by=created_at&per_page=100")"
       # Each human author's access level; 404 = not a member (level 0); any other error is an error.
+      # At most 25 lookups (newest authors first) so a crowded thread stays inside sandcastle's 30s
+      # prompt-command timeout; authors beyond that are treated as untrusted (level 0).
       levels='{}'; errf="$(mktemp)"
-      for uid in $(jq -r '[.[] | select((.system // false) | not) | .author.id] | unique | .[]' <<<"$notes"); do
+      for uid in $(jq -r '[.[] | select((.system // false) | not) | .author.id] | reduce .[] as $i ([]; if index($i) then . else . + [$i] end) | .[0:25] | .[]' <<<"$notes"); do
         if member="$(glab api "projects/$pid/members/all/$uid" 2>"$errf")"; then lvl="$(jq -r '.access_level // 0' <<<"$member")"
         elif grep -q "404" "$errf"; then lvl=0
         else cat "$errf" >&2; rm -f "$errf"; exit 1; fi
         levels="$(jq -c --arg u "$uid" --argjson l "$lvl" '. + {($u): $l}' <<<"$levels")"
       done
       rm -f "$errf"
-      jq -r --argjson levels "$levels" --argjson min "$min_level" "$disc_defs"'
-        [.[] | select((.system // false) | not)
+      jq -r --argjson levels "$levels" --argjson min "$min_level" --arg denied "${FORGE_UNTRUSTED_AUTHORS:-}" "$disc_defs"'
+        ($denied | split(",") | map(select(length > 0))) as $deny
+        | [.[] | select((.system // false) | not)
              | {who: (.author.username // "unknown"), at: (.created_at // ""), body: (.body // ""),
-                ok: (($levels[(.author.id | tostring)] // 0) >= $min)}]
+                ok: (($levels[(.author.id | tostring)] // 0) >= $min and ((.author.username // "") as $l | $deny | index($l)) == null)}]
         | render' <<<"$notes"
     fi ;;
 
