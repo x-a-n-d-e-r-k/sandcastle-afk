@@ -36,6 +36,14 @@ export interface PrView {
   baseRef: string;
 }
 
+export interface PrReviewGate {
+  head: string;
+  blockingBody: string;
+  blockingSha: string;
+  rebuttal: string;
+  headReviewed: string;
+}
+
 export interface PrPipeline {
   id: string;
   status: string;
@@ -116,6 +124,9 @@ export const prLabel = (num: number, ...rest: Arg[]): void => {
 export const prComment = (num: number, ...rest: Arg[]): void => {
   forge(`pr-comment ${[num, ...rest].join(" ")}`.trim());
 };
+
+export const prReviewGate = (num: number, ...rest: Arg[]): PrReviewGate =>
+  forgeJSON<PrReviewGate>(`pr-review-gate ${[num, ...rest].join(" ")}`.trim());
 
 export const prFeedback = (num: number, ...rest: Arg[]): string =>
   forge(`pr-feedback ${[num, ...rest].join(" ")}`.trim());

@@ -4,11 +4,12 @@ import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCr
 import * as forge from "./forge-client.js";
 import { uiGate, reviewUiBlock } from "./ui.js";
 import { isEntryPoint } from "./entry.js";
+import { priorFindingsBlock } from "./review-gate.js";
 
 // Review one PR/MR:  pnpm afk:review <number>
 
 // Exported so the prompt-arg parity test (#55) can assert this site's shape without Docker.
-export const cliReviewOpts = (pr: number, branch: string, issue: string): RunOptions => ({
+export const cliReviewOpts = (pr: number, branch: string, issue: string, prior = ""): RunOptions => ({
   name: `review-${pr}`,
   sandbox: docker({ imageName: cfg.imageName }),
   agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
@@ -16,6 +17,7 @@ export const cliReviewOpts = (pr: number, branch: string, issue: string): RunOpt
   promptArgs: {
     PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: phaseRules(loadAgentRules(), cfg.idleTimeoutSeconds),
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT: renderPreflight(cfg.preflight),
+    PRIOR_BLOCKING_FINDINGS: prior, // the previous blocking review to account for (#81)
   },
   branchStrategy: { type: "branch", branch, baseBranch: `origin/${cfg.defaultBranch}` },
   maxIterations: 1,
@@ -47,7 +49,11 @@ async function main(): Promise<void> {
   sh(`git fetch origin ${branch}`);
   sh(`git branch -f ${branch} origin/${branch}`);
 
-  const r = await run(cliReviewOpts(Number(PR), branch, issue));
+  // The re-review is not stateless (#81): show it the latest blocking review and any rebuttal.
+  let prior = "";
+  try { const gate = forge.prReviewGate(Number(PR)); prior = priorFindingsBlock(gate.blockingBody, gate.rebuttal); }
+  catch (e) { console.warn(`Warning: could not read PR #${PR}'s review state (${(e as Error).message.split("\n")[0]}); reviewing without prior findings.`); }
+  const r = await run(cliReviewOpts(Number(PR), branch, issue, prior));
 
   log(`Review run done for PR #${PR} (issue #${issue}): branch ${r.branch}`);
 }
