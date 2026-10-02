@@ -50,16 +50,21 @@ export type HealPushDeps = {
   escalate: (count: number, openFinding: string) => void;
   /** The finding a no-push escalation should quote (e.g. the blocking review body). */
   openFinding: () => string;
+  /** Stop requested (afk:stop / Ctrl-C)? Checked between attempts, so retries never block a stop. */
+  shouldStop?: () => boolean;
   log: (m: string) => void;
 };
 
-export type HealPushOutcome = "pushed" | "rebutted" | "escalated";
+export type HealPushOutcome = "pushed" | "rebutted" | "escalated" | "stopped";
 
 export async function healUntilPushed(pr: number, why: string, d: HealPushDeps): Promise<HealPushOutcome> {
   let note = "";
-  for (;;) {
+  // Bounded by THIS call's attempts as well as the forge count: a count that never moves (GitLab's
+  // note list failing reads as 0) must not turn no-push retries into an endless in-cycle loop.
+  for (let attempt = 0; ; attempt++) {
+    if (attempt > 0 && d.shouldStop?.()) { d.log(`PR #${pr}: stop requested — no further heal attempts`); return "stopped"; }
     const n = d.count();
-    if (healDecision(n, d.maxHeal) === "escalate") { d.escalate(n, d.openFinding()); return "escalated"; }
+    if (healDecision(Math.max(n, attempt), d.maxHeal) === "escalate") { d.escalate(Math.max(n, attempt), d.openFinding()); return "escalated"; }
     const before = d.head(), rebuttalsBefore = d.rebuttals();
     d.log(`PR #${pr} ${why} -> heal ${n + 1}/${d.maxHeal}${note ? " (previous heal pushed nothing)" : ""}`);
     d.mark();

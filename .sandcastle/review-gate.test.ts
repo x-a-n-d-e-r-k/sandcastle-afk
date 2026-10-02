@@ -62,3 +62,17 @@ test("merge backstop: allowed after a new commit, or with a rebuttal, or with no
 test("GitLab parity: a changes-requested note carries no commit, so the backstop never fires (label flow unchanged)", () => {
   assert.equal(sameCommitAsBlock({ head: HEAD, blockingSha: "", rebuttal: "" }), false);
 });
+
+// BLOCKER fix: on GitHub a pushed fix whose re-review failed still reads CHANGES_REQUESTED (from the
+// review on the OLD commit). Healing again would push nothing and park a fixed PR; re-review instead.
+const { changesRequestedAction } = await import("./review-gate.js");
+
+test("CHANGES_REQUESTED on an OLDER commit than the head → re-review the new head, don't heal", () => {
+  assert.equal(changesRequestedAction({ head: "c2c2c2c2", blockingSha: "c1c1c1c1" }), "rereview");
+});
+
+test("CHANGES_REQUESTED on the current head → heal; GitLab (no blockingSha) or unreadable gate → heal (unchanged)", () => {
+  assert.equal(changesRequestedAction({ head: HEAD, blockingSha: HEAD }), "heal");
+  assert.equal(changesRequestedAction({ head: HEAD, blockingSha: "" }), "heal");
+  assert.equal(changesRequestedAction(null), "heal");
+});

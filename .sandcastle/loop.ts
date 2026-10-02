@@ -9,7 +9,7 @@ import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix
 import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
-import { priorFindingsBlock, quote } from "./review-gate.js";
+import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
@@ -204,6 +204,10 @@ const reviewGate = (pr: number) => {
 // What a (re-)review must account for: the latest blocking review and any rebuttal of it.
 const priorFor = (pr: number): string => { const g = reviewGate(pr); return g ? priorFindingsBlock(g.blockingBody, g.rebuttal) : ""; };
 
+// Stop check for work that loops WITHIN a cycle (heal retries, #81). main() points it at its full
+// stopNow (sentinel + Ctrl-C); the default covers the sentinel alone.
+let stopRequested: () => boolean = () => stopSentinelExists();
+
 // A heal must PUSH (or rebut) before the PR is reviewed again (#81); the budget counts ATTEMPTS (#69).
 const healDeps = (pr: number, branch: string, issue: string, finding: () => string): HealPushDeps => {
   const review = async () => {
@@ -223,6 +227,7 @@ const healDeps = (pr: number, branch: string, issue: string, finding: () => stri
     afterPush: review,
     afterRebuttal: review,
     openFinding: finding,
+    shouldStop: () => stopRequested(),
     escalate: (n, open) => {
       log(`PR #${pr} heal cap (${n}/${MAX_HEAL} attempts) -> escalating to ${L.needsHuman}`);
       escalate(pr, `${n} heal attempts did not converge (forge pr-heal-reset ${pr} gives it a fresh budget)${open.trim() ? `. Still open:\n\n${quote(open)}\n\n` : ""}`);
@@ -287,6 +292,7 @@ async function main(): Promise<void> {
     log("stop requested (Ctrl-C) — will exit at the next safe point. Ctrl-C again to force.");
   });
   const stopNow = () => shouldStop(signalledStop, stopSentinelExists());
+  stopRequested = stopNow;
   clearStopSentinel(); // ignore a stale sentinel left by a previously force-killed run
 
   while (true) {
@@ -500,8 +506,19 @@ async function main(): Promise<void> {
               }
             }
           } else if (pr.reviewState === "CHANGES_REQUESTED") {
-            await healUntilPushed(pr.number, "CHANGES_REQUESTED",
-              healDeps(pr.number, branch, issue, () => reviewGate(pr.number)?.blockingBody ?? ""));
+            const gate = reviewGate(pr.number);
+            if (changesRequestedAction(gate) === "rereview") {
+              // The block is on an older commit than the head: a pushed fix whose re-review never
+              // landed. Review the new head (with the open findings) instead of healing again.
+              log(`PR #${pr.number}: blocked on ${gate!.blockingSha.slice(0, 8)}, head is ${gate!.head.slice(0, 8)} -> re-reviewing the new head`);
+              forge.prClearChanges(pr.number);
+              syncBranch(branch);
+              if (EXTERNAL) log(`#${pr.number} awaiting external re-review.`);
+              else await runGuarded(reviewOpts(pr.number, branch, issue, priorFindingsBlock(gate!.blockingBody, gate!.rebuttal)));
+            } else {
+              await healUntilPushed(pr.number, "CHANGES_REQUESTED",
+                healDeps(pr.number, branch, issue, () => gate?.blockingBody ?? reviewGate(pr.number)?.blockingBody ?? ""));
+            }
           } else {
             if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
             else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue, priorFor(pr.number))); }

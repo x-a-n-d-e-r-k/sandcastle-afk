@@ -50,8 +50,10 @@ async function main(): Promise<void> {
   sh(`git branch -f ${branch} origin/${branch}`);
 
   // The re-review is not stateless (#81): show it the latest blocking review and any rebuttal.
-  const gate = forge.prReviewGate(Number(PR));
-  const r = await run(cliReviewOpts(Number(PR), branch, issue, priorFindingsBlock(gate.blockingBody, gate.rebuttal)));
+  let prior = "";
+  try { const gate = forge.prReviewGate(Number(PR)); prior = priorFindingsBlock(gate.blockingBody, gate.rebuttal); }
+  catch (e) { console.warn(`Warning: could not read PR #${PR}'s review state (${(e as Error).message.split("\n")[0]}); reviewing without prior findings.`); }
+  const r = await run(cliReviewOpts(Number(PR), branch, issue, prior));
 
   log(`Review run done for PR #${PR} (issue #${issue}): branch ${r.branch}`);
 }

@@ -113,3 +113,23 @@ test("a heal that REBUTS instead of changing code goes to a re-review that must 
   assert.deepEqual(pr.events, ["re-review(rebuttal)"]);
   assert.equal(pr.head, "b4d0c116", "nothing pushed");
 });
+
+test("BLOCKER fix: a heal count that NEVER moves (GitLab note list failing → 0) still terminates at maxHeal attempts", async () => {
+  const { pr, deps } = fakePr([false, false, false, false, false, false, false, false]);
+  let heals = 0;
+  const out = await healUntilPushed(1, "x", deps({
+    count: () => 0, // stuck
+    heal: async () => { heals++; if (heals > 10) throw new Error("runaway: unbounded in-cycle heal loop"); },
+  }));
+  assert.equal(out, "escalated");
+  assert.equal(heals, 3, "exactly maxHeal attempts in this call, then escalate");
+  assert.equal(pr.escalations[0].n, 3);
+});
+
+test("a stop request between attempts ends the retries (afk:stop is never blocked by heal retries)", async () => {
+  const { deps } = fakePr([false, false, false]);
+  let heals = 0;
+  const out = await healUntilPushed(1, "x", deps({ heal: async () => { heals++; }, shouldStop: () => heals >= 1 }));
+  assert.equal(out, "stopped");
+  assert.equal(heals, 1);
+});

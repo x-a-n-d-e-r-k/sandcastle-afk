@@ -7,6 +7,14 @@
 // Rendered into review.md as {{PRIOR_BLOCKING_FINDINGS}}; "" when nothing blocked the PR.
 // ---------------------------------------------------------------------------
 
+// What CHANGES_REQUESTED should trigger (#81). A block made on an OLDER commit than the current head
+// is stale: the fix may already be pushed and only the re-review failed (on GitHub the decision stays
+// CHANGES_REQUESTED until a new review lands). Healing it again would push nothing and burn the budget
+// to needs-human with the fixed head never reviewed — so re-review instead. GitLab (no blockingSha) and
+// an unreadable gate keep today's behaviour: heal.
+export const changesRequestedAction = (g: { head: string; blockingSha: string } | null): "heal" | "rereview" =>
+  g && g.blockingSha && g.head && g.blockingSha !== g.head ? "rereview" : "heal";
+
 export const quote = (s: string): string => s.trim().split("\n").map((l) => `> ${l}`).join("\n");
 
 export const priorFindingsBlock = (blockingBody: string, rebuttal = ""): string => {
