@@ -13,10 +13,13 @@ import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
+import { afterImplement, issueFingerprint, DEFAULT_MAX_NO_PR_RUNS } from "./no-pr.js";
 
-const RULES = loadAgentRules();
+// House rules are re-read for EVERY run (a cheap local read), so `pnpm afk:rules` / editing
+// house-rules.md takes effect on the next dispatch without restarting running loops (#86).
 // Phases that run long commands also get the liveness rule (#53); triage keeps plain house rules.
-const PHASE_RULES = phaseRules(RULES, cfg.idleTimeoutSeconds);
+const RULES = () => loadAgentRules();
+const PHASE_RULES = () => phaseRules(RULES(), cfg.idleTimeoutSeconds);
 // The preflight gate travels in the prompt, not as a file: the gitignored .sandcastle/preflight.sh
 // is never in the sandbox worktree (#55). Every phase that runs preflight gets it; triage doesn't.
 const PREFLIGHT = renderPreflight(cfg.preflight);
@@ -98,7 +101,7 @@ export const implementOpts = (issue: number, resume = false): RunOptions => ({
   // no diff to match. Injected whenever `ui` is configured; the host gate (uiGate) does the
   // conditional enforcement once a diff exists. Empty string when `ui` is unset.
   promptArgs: {
-    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES,
+    ISSUE_NUMBER: String(issue), BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES(),
     // Resuming from a checkpoint commit left by a killed attempt (#53); "" on a fresh dispatch.
     RESUME: resume ? resumePrompt(issue) : "",
     UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT,
@@ -111,7 +114,7 @@ export const reviewOpts = (pr: number, branch: string, issue: string, prior = ""
   // is unset (external mode); internal mode is guaranteed the token by checkReviewCredential().
   agent: claudeCode(cfg.models.review, { env: reviewAgentEnv() }),
   promptArgs: {
-    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES,
+    PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES(),
     UI_VERIFICATION: reviewUiBlock(uiGate(pr, branch, cfg.ui), cfg.ui), PREFLIGHT,
     // The previous blocking review the re-review must account for (#81); "" when none.
     PRIOR_BLOCKING_FINDINGS: prior,
@@ -123,11 +126,11 @@ export const healOpts = (pr: number, branch: string, issue: string, note = ""): 
   // SHA now, #35), so the healing agent must know to re-render and re-publish. Empty when the
   // consumer has no `ui` config.
   // HEAL_NOTE: e.g. "your previous heal pushed nothing" (#81); "" on a first attempt.
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT, HEAL_NOTE: note },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, AGENT_RULES: PHASE_RULES(), UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT, HEAL_NOTE: note },
 });
 export const resolveConflictsOpts = (pr: number, branch: string, issue: string): RunOptions => ({
   ...baseRun(`resolve-${pr}`, branch, ".sandcastle/resolve-conflicts.md", cfg.models.heal, true),
-  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES, UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
+  promptArgs: { PR_NUMBER: String(pr), ISSUE_NUMBER: issue, BASE_BRANCH: cfg.defaultBranch, AGENT_RULES: PHASE_RULES(), UI_VERIFICATION: implementUiBlock(cfg.ui), PREFLIGHT },
 });
 
 // Idle-triage `needs-feedback` re-evaluation agent (#414). Issue-ops only: it reads each
@@ -140,7 +143,7 @@ export const triageOpts = (): RunOptions => {
   return {
     ...baseRun("triage", "afk/triage", ".sandcastle/triage.md", cfg.models.triage, false),
     ...(dry ? { agent: claudeCode(cfg.models.triage, { env: { AFK_TRIAGE_DRY_RUN: dry } }) } : {}),
-    promptArgs: { AGENT_RULES: RULES },
+    promptArgs: { AGENT_RULES: RULES() },
   };
 };
 
@@ -546,6 +549,7 @@ async function main(): Promise<void> {
           sh(`git fetch origin ${cfg.defaultBranch}`);
           // A run killed mid-work (idle timeout, crash) leaves a `wip(#n): checkpoint` commit on
           // its branch; resume from it instead of deleting it, up to maxResume times (#53).
+          let implementResult: RunResult | undefined;
           const kind = await dispatchIssue(n, {
             maxResume: cfg.maxResume,
             hasCheckpoint: () => hasCheckpoint({ issue: n, repo: ROOT, base: cfg.defaultBranch }),
@@ -558,11 +562,35 @@ async function main(): Promise<void> {
             },
             deleteBranch: () => deleteStaleBranch(n),
             keepBranch: () => syncBranch(`agent/issue-${n}`),
-            implement: (resume) => runGuarded(implementOpts(n, resume)),
+            implement: async (resume) => { implementResult = await runGuarded(implementOpts(n, resume)); },
             checkpoint: (err) => checkpointAfterFailure({ issue: n, err, repo: ROOT, identity: requireGitIdentity(cfg.gitIdentity) }),
             log,
           });
-          if (kind !== "escalate") log(`opened PR for #${n}`);
+          // Did the run actually open a PR? A clean exit without one used to be re-dispatched forever,
+          // logged as "opened PR" each time (#86). Verify, count no-PR runs, escalate when stuck.
+          if (kind !== "escalate") {
+            afterImplement(n, {
+              maxNoPrRuns: cfg.maxNoPrRuns ?? DEFAULT_MAX_NO_PR_RUNS,
+              prOpened: () => forge.prList().some((p) => p.headRef === `agent/issue-${n}`),
+              stdout: implementResult?.stdout ?? "",
+              fingerprint: () => {
+                let discussion = "";
+                try { discussion = forge.issueDiscussion(n); }
+                catch (e) { log(`#${n}: could not read its discussion for the no-PR fingerprint (${(e as Error).message.split("\n")[0]})`); }
+                return issueFingerprint(forge.issueView(n).body ?? "", discussion);
+              },
+              comments: () => forge.issueComments(n),
+              mark: (marker) => forge.issueComment(n, "--body", JSON.stringify(`${marker} implement ended without opening a PR.`)),
+              escalate: (reason, said) => {
+                forge.issueEdit(n, "--add-label", L.needsHuman);
+                forge.issueComment(n, "--body", JSON.stringify(
+                  `AFK: ${reason}. Parking for a human.${said ? `\n\nThe agent's last words:\n\n${quote(said)}` : ""}\n\n` +
+                  `To retry: answer the blocker (edit the issue body or add a maintainer comment — either resets the count) and remove \`${L.needsHuman}\`.`));
+                if (MINE) forge.issueEdit(n, "--remove-label", MINE);
+              },
+              log,
+            });
+          }
         } else {
           if (shouldRunTriage(Date.now(), lastTriageAt, cfg.triageIntervalMinutes * 60_000)) {
             lastTriageAt = Date.now();

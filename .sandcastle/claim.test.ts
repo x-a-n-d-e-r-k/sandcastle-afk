@@ -217,3 +217,12 @@ test("#78: a `blocked:<x>` sub-label blocks the resume path too (same rule as is
   assert.equal(await pickNextIssue([], d), undefined);
   assert.deepEqual(d.edits, ["remove 52 working:a"]);
 });
+
+// --- #86: an issue parked for a human is never resumed off a stale claim -------------------------
+
+test("#86: a stale own claim on a needs-human issue is released, not resumed (the resume path bypasses isExcluded)", async () => {
+  const parked: Issue = { number: 2732, title: "needs an owner decision", labels: ["agent-ready", "needs-human", "working:a"] };
+  const d = deps({ listReady: () => [parked] });
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, ["remove 2732 working:a"]);
+});

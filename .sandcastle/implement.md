@@ -33,6 +33,10 @@ You are an autonomous coding agent. Implement the single issue above, end to end
    `forge pr-create --base {{BASE_BRANCH}} --title "<concise conventional title>" --body "Closes #{{ISSUE_NUMBER}}"`
 9. When the PR is open, output `<promise>COMPLETE</promise>` and stop.
 
+**If you cannot implement the issue without a decision only a human can make** (the spec contradicts itself, the approved interface conflicts with an acceptance criterion, a required credential or service is missing), do not guess and do not open a PR. Post the blocker on the issue — what conflicts, the options you see, and the question that needs answering:
+`forge issue-comment {{ISSUE_NUMBER}} --body "<the blocker and the question>"`
+then output `<promise>BLOCKED</promise>` and stop. The loop parks the issue for a human instead of retrying it.
+
 {{UI_VERIFICATION}}
 
 ## Rules
