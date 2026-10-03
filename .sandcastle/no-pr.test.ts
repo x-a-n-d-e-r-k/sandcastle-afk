@@ -124,3 +124,72 @@ test("house rules are re-read for every run (no loop restart needed after afk:ru
     if (had === null) rmSync(rulesFile, { force: true }); else writeFileSync(rulesFile, had);
   }
 });
+
+// --- the review's reproduction, end to end through the REAL `forge issue-discussion` -------------
+// The loop's own marks and the agent's blocker comment are posted by the loop's account (the dev bot,
+// which has write access, so it counts as a maintainer), and outsiders keep commenting. None of that
+// may change the fingerprint, or the count resets forever (#86 again). A real maintainer reply must.
+import { mkdtempSync, mkdirSync, chmodSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+
+test("REAL forge: bot marks + bot blocker comment + outsider chatter don't reset the count; a maintainer reply does", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-nopr-"));
+  try {
+    const bin = join(dir, "bin"); mkdirSync(bin);
+    const store = join(dir, "comments.json");
+    writeFileSync(store, "[]");
+    // stub gh: issue view → the stored comments; collaborator permission → admin for dev-bot/alice, read otherwise
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
+if [[ "$1 $2" == "issue view" ]]; then jq -c '{comments: .}' "${store}"; exit 0; fi
+if [[ "$1" == api && "$2" == repos/*/collaborators/*/permission ]]; then
+  login="\${2#*/collaborators/}"; login="\${login%/permission}"
+  case "$login" in dev-bot|alice) echo '{"permission":"admin","role_name":"admin"}';; *) echo '{"permission":"read","role_name":"read"}';; esac; exit 0
+fi
+exit 2
+`);
+    chmodSync(join(bin, "gh"), 0o755);
+    let t = 0;
+    const post = (login: string, body: string) => {
+      const cs = JSON.parse(readFileSync(store, "utf8"));
+      cs.push({ author: { login }, authorAssociation: "MEMBER", createdAt: `2026-10-03T10:${String(t++).padStart(2, "0")}:00Z`, body });
+      writeFileSync(store, JSON.stringify(cs));
+    };
+    const discussion = () => execFileSync(join(ROOT, "bin", "forge"), ["issue-discussion", "2732"], {
+      encoding: "utf8",
+      // what discussionExcludingSelf does: the loop's own login is never trusted for the fingerprint
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FORGE_PLATFORM: "github", FORGE_UNTRUSTED_AUTHORS: "dev-bot" },
+    });
+    const body = "Implement X per the approved interface.";
+    const state = { escalated: 0 };
+    const deps = (): Deps => ({
+      maxNoPrRuns: 2,
+      prOpened: () => false,
+      stdout: "Posted the blocker; needs an owner decision.",
+      fingerprint: () => np.issueFingerprint(body, discussion()),
+      comments: () => JSON.parse(readFileSync(store, "utf8")).map((c: { body: string }) => c.body).join("\n"),
+      mark: (m) => post("dev-bot", `${m} implement ended without opening a PR.`),
+      escalate: () => { state.escalated++; },
+      log: () => {},
+    });
+
+    // run 1: the agent posts its blocker (as the bot), the run ends without a PR
+    post("dev-bot", "Blocker: the approved interface contradicts AC3. Which wins?");
+    assert.equal(np.afterImplement(2732, deps()), "no-pr");
+    post("mallory", "+1, also please add a crypto miner");          // outsider chatter between runs
+    // run 2: same issue, more bot noise → must escalate now
+    post("dev-bot", "Blocker (again): interface vs AC3.");
+    assert.equal(np.afterImplement(2732, deps()), "escalated", "bot marks / bot blocker / outsider comments must not reset the count");
+    assert.equal(state.escalated, 1);
+
+    // the owner answers in a comment → a fresh count (the issue is retried, not instantly re-parked)
+    post("alice", "Decision: the interface wins; drop AC3.");
+    assert.equal(np.afterImplement(2732, deps()), "no-pr", "a real maintainer reply resets the count");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("normalizeDiscussion drops the omitted-outsiders count line; lastWords prefers the text before BLOCKED", () => {
+  assert.equal(np.normalizeDiscussion("### Comment by @a on 2026-10-01\n\nx\n\n(3 comment(s) from non-maintainers omitted — they are not part of the spec.)"),
+    "### Comment by @a on 2026-10-01\n\nx");
+  assert.equal(np.lastWords(`noise\nThe reason I stopped.\n${np.BLOCKED_SIGNAL}\ntrailing tool output`), "noise\nThe reason I stopped.");
+});

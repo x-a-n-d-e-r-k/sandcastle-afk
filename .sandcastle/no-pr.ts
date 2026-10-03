@@ -20,9 +20,16 @@ export const NO_PR_MARKER = "[afk:no-pr";
 export const NO_PR_RESET = "[afk:no-pr-reset]";
 export const DEFAULT_MAX_NO_PR_RUNS = 2;
 
+// The discussion as it bears on WHAT TO BUILD: drop the omitted-outsiders count line, which moves
+// whenever an outsider comments and would otherwise reset the no-PR count on a public repo. (The
+// loop's own markers are dropped by issue-discussion itself, and the loop's own account — which posts
+// the markers AND the agent's blocker comments — is excluded by the caller.)
+export const normalizeDiscussion = (discussion: string): string =>
+  discussion.split("\n").filter((l) => !/^\(\d+ comment\(s\) from non-maintainers omitted/.test(l.trim())).join("\n").trim();
+
 /** Stable fingerprint of what the agent was asked to do: the body plus the maintainer discussion. */
 export const issueFingerprint = (body: string, discussion: string): string =>
-  createHash("sha256").update(`${body}\n\u0000\n${discussion}`).digest("hex").slice(0, 12);
+  createHash("sha256").update(`${body}\n\u0000\n${normalizeDiscussion(discussion)}`).digest("hex").slice(0, 12);
 
 export const noPrMarker = (fp: string): string => `${NO_PR_MARKER} fp=${fp}]`;
 
@@ -33,9 +40,10 @@ export const countNoPr = (comments: string, fp: string): number => {
   return tail.split(noPrMarker(fp)).length - 1;
 };
 
-/** The agent's closing words, for the escalation comment (its reason for stopping, usually). */
+/** The agent's closing words — what it said right before BLOCKED if it signalled, else its last output. */
 export const lastWords = (stdout: string, max = 1500): string => {
-  const t = stdout.replace(new RegExp(BLOCKED_SIGNAL.replace(/[<>/]/g, "\\$&"), "g"), "").trim();
+  const i = stdout.lastIndexOf(BLOCKED_SIGNAL);
+  const t = (i === -1 ? stdout : stdout.slice(0, i)).split(BLOCKED_SIGNAL).join("").trim();
   return t.length > max ? `…${t.slice(-max)}` : t;
 };
 

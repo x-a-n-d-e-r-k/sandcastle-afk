@@ -207,6 +207,18 @@ const reviewGate = (pr: number) => {
 // What a (re-)review must account for: the latest blocking review and any rebuttal of it.
 const priorFor = (pr: number): string => { const g = reviewGate(pr); return g ? priorFindingsBlock(g.blockingBody, g.rebuttal) : ""; };
 
+// The issue's maintainer discussion as the no-PR fingerprint sees it (#86): WITHOUT the loop's own
+// account, which posts the no-PR markers and (through the agent) the blocker comments — otherwise each
+// mark would change the fingerprint and reset the count forever. The login is looked up once.
+let selfLogin: string | undefined;
+const discussionExcludingSelf = (n: number): string => {
+  if (selfLogin === undefined) { try { selfLogin = forge.whoami().trim(); } catch { selfLogin = ""; } }
+  const saved = process.env.FORGE_UNTRUSTED_AUTHORS;
+  process.env.FORGE_UNTRUSTED_AUTHORS = [saved, selfLogin].filter(Boolean).join(",");
+  try { return forge.issueDiscussion(n); }
+  finally { if (saved === undefined) delete process.env.FORGE_UNTRUSTED_AUTHORS; else process.env.FORGE_UNTRUSTED_AUTHORS = saved; }
+};
+
 // Stop check for work that loops WITHIN a cycle (heal retries, #81). main() points it at its full
 // stopNow (sentinel + Ctrl-C); the default covers the sentinel alone.
 let stopRequested: () => boolean = () => stopSentinelExists();
@@ -575,7 +587,7 @@ async function main(): Promise<void> {
               stdout: implementResult?.stdout ?? "",
               fingerprint: () => {
                 let discussion = "";
-                try { discussion = forge.issueDiscussion(n); }
+                try { discussion = discussionExcludingSelf(n); }
                 catch (e) { log(`#${n}: could not read its discussion for the no-PR fingerprint (${(e as Error).message.split("\n")[0]})`); }
                 return issueFingerprint(forge.issueView(n).body ?? "", discussion);
               },
