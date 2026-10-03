@@ -209,10 +209,16 @@ const priorFor = (pr: number): string => { const g = reviewGate(pr); return g ? 
 
 // The issue's maintainer discussion as the no-PR fingerprint sees it (#86): WITHOUT the loop's own
 // account, which posts the no-PR markers and (through the agent) the blocker comments — otherwise each
-// mark would change the fingerprint and reset the count forever. The login is looked up once.
+// mark would change the fingerprint and reset the count forever. Only a SUCCESSFUL lookup is cached;
+// while the login is unknown this returns "" (a body-only fingerprint) rather than the unfiltered
+// discussion, which would bring the endless reset back.
 let selfLogin: string | undefined;
 const discussionExcludingSelf = (n: number): string => {
-  if (selfLogin === undefined) { try { selfLogin = forge.whoami().trim(); } catch { selfLogin = ""; } }
+  if (!selfLogin) {
+    try { selfLogin = forge.whoami().trim() || undefined; }
+    catch (e) { log(`could not resolve the loop's own login (${(e as Error).message.split("\n")[0]}); no-PR fingerprint uses the issue body only`); }
+  }
+  if (!selfLogin) return "";
   const saved = process.env.FORGE_UNTRUSTED_AUTHORS;
   process.env.FORGE_UNTRUSTED_AUTHORS = [saved, selfLogin].filter(Boolean).join(",");
   try { return forge.issueDiscussion(n); }
