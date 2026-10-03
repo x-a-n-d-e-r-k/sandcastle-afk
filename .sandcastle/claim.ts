@@ -8,7 +8,7 @@
 // This lives apart from loop.ts (which imports @ai-hero/sandcastle) on purpose: the
 // claim logic stays unit-testable with no sandbox runtime and no live forge — the deps
 // `pickNextIssue` needs are injected (realPickDeps wires the live ones).
-import { log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
+import { cfg, log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
 import * as forge from "./forge-client.js";
 
 export type Issue = { number: number; title: string; labels: string[] };
@@ -98,13 +98,18 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
     // dependency. With an open PR the claim is PR ownership, so it stays.
     // Same matching rule as isExcluded: `blocked` or a `blocked:<x>` sub-label.
     const isBlocked = (i: Issue) => i.labels.some((l) => l === BLOCKED_LABEL || l.startsWith(`${BLOCKED_LABEL}:`));
-    for (const i of issues.filter((i) => i.labels.includes(mine) && isBlocked(i) && !hasOpenWork(i.number))) {
-      if (dry) { log(`DRY: would release own claim on blocked #${i.number}`); continue; }
-      log(`#${i.number} is blocked — releasing our claim`);
+    // Likewise a claim on an issue parked for a human (#86): the resume path bypasses isExcluded, so
+    // without this an escalated issue that still carried our claim was re-dispatched every cycle.
+    const isParked = (i: Issue) => i.labels.includes(cfg.labels.needsHuman);
+    const held = (i: Issue) => isBlocked(i) || isParked(i);
+    for (const i of issues.filter((i) => i.labels.includes(mine) && held(i) && !hasOpenWork(i.number))) {
+      const why = isParked(i) ? "parked for a human" : "blocked";
+      if (dry) { log(`DRY: would release own claim on ${why} #${i.number}`); continue; }
+      log(`#${i.number} is ${why} — releasing our claim`);
       removeLabel(i.number, mine);
     }
     const resume = issues
-      .filter((i) => i.labels.includes(mine) && !isBlocked(i) && !hasOpenWork(i.number))
+      .filter((i) => i.labels.includes(mine) && !held(i) && !hasOpenWork(i.number))
       .sort(byPriority)[0];
     if (resume) { log(`resuming own claim #${resume.number}`); return resume; }
   }

@@ -128,6 +128,12 @@ export type Cfg = {
    * no default: validated when the config loads.
    */
   maxResume: number;
+  /**
+   * Implement runs that may end WITHOUT a PR (and without a checkpoint) on an unchanged issue before
+   * it is escalated to needsHuman (#86). Optional; default 2. Editing the issue body or adding a
+   * maintainer comment resets the count.
+   */
+  maxNoPrRuns?: number;
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));

@@ -89,7 +89,7 @@ TRANSIENT_RE='HTTP 5[0-9][0-9]|bad gateway|gateway time|service unavailable|inte
 
 is_retryable_verb() {
   case "$1" in
-    issue-list|issue-view|issue-comments|issue-discussion|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-review-gate|pr-feedback) return 0 ;;
+    issue-list|issue-view|issue-comments|issue-discussion|whoami|pr-list|pr-view|pr-diff|pr-changes-count|pr-pipeline|pr-pipeline-failed-jobs|pr-pipeline-failures|pr-pipeline-retry-count|pr-has-conflicts|pr-head-exists|pr-conflict-retry-count|pr-heal-count|pr-review-gate|pr-feedback) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -192,7 +192,7 @@ case "$verb" in
     # Fails (and retries) like any read verb; prompts add a visible fallback.
     [[ -n "$NUM" ]] || die "issue-discussion needs <number>"
     disc_defs='
-      def is_marker: test("^\\s*(\\[(afk-triage\\]|afk:resume\\]|afk:rebuttal\\]|forge:)|AFK:)");
+      def is_marker: test("^\\s*(\\[(afk-triage\\]|afk:resume\\]|afk:rebuttal\\]|afk:no-pr|forge:)|AFK:)");
       def clip: if length > 3000 then .[0:3000] + "\n\n…(comment truncated)" else . end;
       def render:
         map(select((.body | length) > 0 and (.body | is_marker | not))) | sort_by(.at) as $all
@@ -249,6 +249,11 @@ case "$verb" in
              | {who: (.author.username // "unknown"), at: (.created_at // ""), body: (.body // ""),
                 ok: (($levels[(.author.id | tostring)] // 0) >= $min and ((.author.username // "" | ascii_downcase) as $l | $deny | index($l)) == null)}]
         | render' <<<"$notes"
+    fi ;;
+
+  whoami)  # the login of the account this forge token acts as (the loop's own bot, on the host) (#86)
+    if [[ "$PLATFORM" == github ]]; then gh api user -q .login
+    else glab api user | jq -r '.username'
     fi ;;
 
   # ---------- pull / merge requests ----------
