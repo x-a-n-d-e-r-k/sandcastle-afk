@@ -226,3 +226,20 @@ test("#86: a stale own claim on a needs-human issue is released, not resumed (th
   assert.equal(await pickNextIssue([], d), undefined);
   assert.deepEqual(d.edits, ["remove 2732 working:a"]);
 });
+
+// --- #88: an MR left open after its issue was closed is still OWNED (not orphaned) ---------------
+const claimMod = await import("./claim.js");
+const { ownedIssueNumbers } = claimMod;
+
+test("#88: owned issues = this loop's claimed issues, open AND closed", () => {
+  const owned = ownedIssueNumbers([{ number: 1 }, { number: 2 }], [{ number: 433 }]);
+  assert.deepEqual([...owned].sort((a, b) => a - b), [1, 2, 433], "the closed-but-claimed issue's open MR stays drivable");
+});
+
+test("#88: a PR parked for a human leaves the in-flight set, so the next cycle dispatches new work", () => {
+  const { inFlightPrs } = claimMod;
+  const pr = { headRef: "agent/issue-433", labels: [] as string[] };
+  assert.equal(inFlightPrs([pr], "needs-human", () => true).length, 1, "a live PR blocks dispatch (in flight)");
+  pr.labels.push("needs-human"); // what the closed-issue 'park' path does
+  assert.equal(inFlightPrs([pr], "needs-human", () => true).length, 0, "parked → not in flight → pickNextIssue runs");
+});

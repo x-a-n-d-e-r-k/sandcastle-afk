@@ -16,12 +16,30 @@ export type IssueCloseDeps = {
 // GitLab merged the MR but left `Closes #N` unapplied, and the still-open, still-claimed issue was
 // resumed into a fresh PR for work that had already shipped.
 export function closeLinkedIssue(issue: number, pr: number, d: IssueCloseDeps): "closed" | "already-closed" {
-  if (d.issueState(issue) !== "open") return "already-closed";
+  // The claim is released either way (#88): a claim left on a CLOSED issue kept an orphaned PR
+  // "owned" by nobody's reckoning — and is stale bookkeeping in any case.
+  if (d.issueState(issue) !== "open") { d.releaseClaim(issue); return "already-closed"; }
   d.log(`#${issue} still open after PR #${pr} merged — closing it and releasing the claim (the forge did not auto-close it)`);
   d.closeIssue(issue, `AFK: closed after PR #${pr} merged — the forge did not auto-close it.`);
   d.releaseClaim(issue);
   return "closed";
 }
+
+// A PR whose linked issue is CLOSED (#88 review): the forge may have merged it but left it open (then
+// the issue closed via Closes #N), or a maintainer closed the issue as "not planned". Either way the
+// loop must not review, heal or MERGE it. But it must not merely skip it either: an in-flight PR keeps
+// the loop from dispatching new work, so every DEFINITE answer takes the PR out of flight:
+//   - source branch missing → "orphan"   (#61 handling: label, close, release the claim)
+//   - change already on base → "finalize" (comment, close the PR, release the claim)
+//   - change NOT on base     → "park"     (needs-human with a comment — a person decides)
+// Only a transient failure (head or landed check errored) → "wait": skip it this cycle.
+export type ClosedIssuePrAction = "orphan" | "finalize" | "park" | "wait";
+export const closedIssuePrAction = (o: { headExists: boolean | "error"; landed: () => boolean | "error" }): ClosedIssuePrAction => {
+  if (o.headExists === "error") return "wait";
+  if (o.headExists === false) return "orphan";
+  const l = o.landed();
+  return l === "error" ? "wait" : l ? "finalize" : "park";
+};
 
 // --- merge guard (#71) -----------------------------------------------------------------------
 // A degraded GitLab carried out one `pr-merge --squash` six times server-side and left the MR
@@ -37,10 +55,22 @@ export const alreadyLanded = (baseTree: string, mergedTree: string): boolean =>
 
 // Git side of the check. Throws on ANY git error (including a conflicting merge-tree, which exits
 // non-zero) — the caller treats a throw as "don't merge this cycle", never as "merge anyway".
-export const landedOnBase = (o: { repo: string; base: string; branch: string; run: Run }): boolean => {
+// `conflictMeansNotLanded`: a merge-tree CONFLICT (exit 1) answers "not landed" instead of throwing.
+// The pre-merge guard keeps the default (throw → don't merge this cycle). The closed-issue path (#88)
+// sets it: an abandoned PR usually conflicts with a base that moved on, and treating that as a
+// transient error left it in flight forever. Fetch / rev-parse failures always throw.
+export const landedOnBase = (o: { repo: string; base: string; branch: string; run: Run; conflictMeansNotLanded?: boolean }): boolean => {
   o.run(`git fetch -q origin ${o.base} ${o.branch}`, o.repo);
   const baseTree = o.run(`git rev-parse origin/${o.base}^{tree}`, o.repo);
-  const mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim();
+  let mergedTree: string;
+  try { mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim(); }
+  catch (e) {
+    // Exit 1 = a conflict — or an unresolvable ref (git reports both as 1). Here both refs were just
+    // fetched and base rev-parsed, so it is a conflict in practice; either way "not landed" only parks
+    // the PR for a human, never merges it.
+    if (o.conflictMeansNotLanded && (e as { status?: number }).status === 1) return false;
+    throw e;
+  }
   return alreadyLanded(baseTree, mergedTree);
 };
 
@@ -70,7 +100,11 @@ export function guardedMerge(pr: number, d: MergeDeps): MergeOutcome {
     return "finalized-landed";
   }
 
-  d.merge();
+  // A failed merge CALL is an unknown outcome, not a failure (#88): a self-hosted GitLab merged and then
+  // answered 500. Fall through to the same post-merge check — merged / landed-but-open → finalize /
+  // genuinely not merged → leave it for the next cycle (never a second merge in this one).
+  try { d.merge(); }
+  catch (e) { d.log(`PR #${pr}: the merge call failed (${(e as Error).message.split("\n")[0]}) — outcome unknown, checking whether it landed`); }
   if (!d.stillOpen()) { d.log(`merged #${pr}`); d.closeIssue(); return "merged"; }
 
   // The merge call returned but the PR still reads open. If the change landed anyway, the forge

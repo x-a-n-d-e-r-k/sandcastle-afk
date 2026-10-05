@@ -109,7 +109,7 @@ case "$verb" in
       # glab `issue list`: state is --opened/--closed/--all (no --state); JSON is --output (not -F).
       gl=(); case "$state" in closed) gl=(--closed);; all) gl=(--all);; esac
       lbl=(); [[ ${#labels[@]} -gt 0 ]] && lbl=(--label "$(csv "${labels[@]}")")
-      glab issue list ${gl[@]+"${gl[@]}"} ${lbl[@]+"${lbl[@]}"} --output json \
+      glab issue list ${gl[@]+"${gl[@]}"} ${lbl[@]+"${lbl[@]}"} --per-page 100 --output json \
         | jq '[.[] | {number: .iid, title, labels: (.labels // [])}]'
     fi ;;
 
@@ -468,7 +468,42 @@ case "$verb" in
     if [[ "$PLATFORM" == github ]]; then
       gh pr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --delete-branch )
     else
-      glab mr merge "$NUM" $( [[ "${SQUASH}" == 1 ]] && echo --squash ) $( [[ "${DELBR}" == 1 ]] && echo --remove-source-branch ) $( [[ "${NOAUTO}" == 1 ]] && echo --auto-merge=false ) --yes
+      # EXACTLY ONE merge request (#88). `glab mr merge` goes through an HTTP client that retries a 5xx,
+      # but PUT …/merge is not idempotent: a server that merges and THEN answers 500 got the same change
+      # squash-merged six times per call. So: a single PUT with no client retries, pinned to the head we
+      # saw (`sha`), and a non-2xx answer is UNKNOWN, not failure — re-read the MR: merged → success;
+      # anything else → fail, and the loop's merge guard (#71) re-evaluates (landed check) next cycle.
+      # Auto-merge is never requested (merge_when_pipeline_succeeds is not sent).
+      mr="$(glab mr view "$NUM" -F json)"
+      pid="$(jq -r '.project_id' <<<"$mr")"; iid="$(jq -r '.iid' <<<"$mr")"; head_sha="$(jq -r '.sha // empty' <<<"$mr")"
+      [[ -n "$head_sha" ]] || die "pr-merge: MR !$NUM has no head sha (source branch missing?) — not merging"
+      api="${GITLAB_API_URL:-$(jq -r '.web_url | capture("^(?<b>https?://[^/]+)").b' <<<"$mr")/api/v4}"
+      host="$(sed -E 's#^https?://([^/]+).*#\1#' <<<"$api")"
+      tok="${GITLAB_TOKEN:-${GITLAB_ACCESS_TOKEN:-${GLAB_TOKEN:-}}}"; auth="PRIVATE-TOKEN: "
+      if [[ -z "$tok" && -n "${OAUTH_TOKEN:-}" ]]; then tok="$OAUTH_TOKEN"; auth="Authorization: Bearer "; fi
+      [[ -n "$tok" ]] || tok="$(glab config get token --host "$host" 2>/dev/null || true)"
+      [[ -n "$tok" ]] || die "pr-merge: no GitLab token (set GITLAB_TOKEN, or log in with glab)"
+      hdr="$(mktemp)"; resp="$(mktemp)"; chmod 600 "$hdr"
+      printf '%s%s\n' "$auth" "$tok" > "$hdr"   # header from a file: the token never appears in argv
+      set +e
+      code="$(curl -sS --max-time 120 -o "$resp" -w '%{http_code}' -X PUT -H @"$hdr" \
+        --data-urlencode "sha=$head_sha" \
+        --data-urlencode "squash=$( [[ "${SQUASH}" == 1 ]] && echo true || echo false )" \
+        --data-urlencode "should_remove_source_branch=$( [[ "${DELBR}" == 1 ]] && echo true || echo false )" \
+        "$api/projects/$pid/merge_requests/$iid/merge")"
+      rc=$?
+      set -e
+      rm -f "$hdr"
+      if [[ $rc -eq 0 && "$code" =~ ^2 ]]; then cat "$resp"; rm -f "$resp"; exit 0; fi
+      body="$(head -c 300 "$resp" 2>/dev/null || true)"; rm -f "$resp"
+      # Unknown outcome: did the merge actually happen?
+      mr_state="$(glab mr view "$NUM" -F json | jq -r '.state')"
+      if [[ "$mr_state" == merged ]]; then
+        # stdout, not stderr: the retry wrapper only surfaces stderr when a verb fails.
+        echo "forge: pr-merge got HTTP ${code:-none} (curl rc $rc) but !$NUM IS merged — treating as success"
+        exit 0
+      fi
+      die "pr-merge: merge request answered HTTP ${code:-none} (curl rc $rc) and !$NUM is still '$mr_state': $body"
     fi ;;
 
   pr-label)

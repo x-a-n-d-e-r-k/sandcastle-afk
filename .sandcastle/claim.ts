@@ -30,6 +30,18 @@ export const claimWinner = (labels: string[]): string | undefined =>
     .map((l) => l.slice(WORKING.length + 1))
     .sort()[0];
 
+// The issues whose agent PRs THIS loop drives (#8): its claimed issues — open AND closed (#88). A forge
+// that merged an MR but left it open closes the issue (via Closes #N) while the MR stays open; counting
+// only OPEN claimed issues orphaned that MR for every loop, so the merge guard could never finalize it.
+export const ownedIssueNumbers = (openClaimed: { number: number }[], closedClaimed: { number: number }[]): Set<number> =>
+  new Set([...openClaimed, ...closedClaimed].map((i) => i.number));
+
+// The agent PRs this loop drives this cycle: its own, minus those parked for a human. New work is only
+// dispatched when this is EMPTY — so anything the loop can't act on must leave it (be parked), not just
+// be skipped, or one stuck PR blocks dispatch forever (#88 review).
+export const inFlightPrs = <P extends { headRef: string; labels: string[] }>(prs: P[], needsHuman: string, isMine: (headRef: string) => boolean): P[] =>
+  prs.filter((p) => !p.labels.includes(needsHuman) && isMine(p.headRef));
+
 // Everything pickNextIssue touches, injected so it's testable without a live forge.
 export type PickDeps = {
   listReady: () => Issue[];
