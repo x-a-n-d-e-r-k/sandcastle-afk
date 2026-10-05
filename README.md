@@ -50,8 +50,11 @@ npm run afk:loop       # the daemon: dispatch -> review -> heal -> merge, foreve
 | `afk` | Single dispatch: implement the next `agent-ready` issue → PR/MR |
 | `afk:review <n>` | Independently review one PR/MR (different model + reviewer identity) |
 | `afk:loop` | The orchestrator daemon (concurrency 1) — dispatch, review, heal, merge |
+| `afk:stop` | Stop a running loop after its current run (works from any terminal) |
 | `afk:claims` | Read-only ownership dashboard for concurrent loops — who claimed what; non-zero exit if contested |
 | `afk:sentinel` | Out-of-band e2e regression sentinel (files agent-ready issues for genuine failures) |
+
+**Stopping the loop.** In its terminal, Ctrl-C once stops it after the current run finishes; Ctrl-C again stops it immediately (the container is removed). `afk:stop` is the same soft stop from anywhere.
 
 ## Staying up to date (`afk:update`)
 
