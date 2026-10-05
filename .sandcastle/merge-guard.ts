@@ -65,6 +65,9 @@ export const landedOnBase = (o: { repo: string; base: string; branch: string; ru
   let mergedTree: string;
   try { mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim(); }
   catch (e) {
+    // Exit 1 = a conflict — or an unresolvable ref (git reports both as 1). Here both refs were just
+    // fetched and base rev-parsed, so it is a conflict in practice; either way "not landed" only parks
+    // the PR for a human, never merges it.
     if (o.conflictMeansNotLanded && (e as { status?: number }).status === 1) return false;
     throw e;
   }
