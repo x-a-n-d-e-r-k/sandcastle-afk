@@ -5,6 +5,7 @@ import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers, inFlightPrs } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
+import { presses, shieldSigint, shouldSupervise, superviseInOwnGroup, parentGone, CHILD_ENV } from "./soft-stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
 import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
@@ -286,6 +287,9 @@ function runTriageSweep() {
 }
 
 async function main(): Promise<void> {
+  // At a terminal, run the loop in its own process group under a thin supervisor, so Ctrl-C can't
+  // kill the in-flight agent run (its docker exec clients) on a soft stop. See soft-stop.ts.
+  if (shouldSupervise()) process.exit(await superviseInOwnGroup({ log }));
   // Fail fast if the reviewer credential is misplaced (in .env, where it leaks to every
   // sandbox) or missing in internal mode — before any container starts (#32).
   checkReviewCredential();
@@ -302,17 +306,32 @@ async function main(): Promise<void> {
   //     graceful path: it never signals the running container, so the current run
   //     always finishes. Works when the loop is detached (tmux), from any terminal.
   //   - SIGINT (Ctrl-C) sets the flag so the loop stops at the next safe point instead
-  //     of dying mid-iteration. A second Ctrl-C force-exits. (Ctrl-C reaches the whole
-  //     process group, so it may still cut an in-flight run short — use afk:stop to let
-  //     a run finish; any worktree it leaks is reclaimed by pruneWorktrees next start.)
+  //     of dying mid-iteration; the current run finishes (the supervisor keeps the
+  //     terminal's SIGINT away from it). A second Ctrl-C force-exits: process.exit runs
+  //     sandcastle's exit hook, which removes the container. Any worktree that leaks is
+  //     reclaimed by pruneWorktrees next start.
+  //   - The terminal closing (SIGHUP) or the supervisor dying is a soft stop too.
   let signalledStop = false;
-  let sigints = 0;
+  const press = presses();
   process.on("SIGINT", () => {
-    if (++sigints >= 2) { log("force stop (second Ctrl-C) — exiting now."); process.exit(130); }
+    const n = press();
+    if (n === null) return; // the same keypress, relayed a second time by tsx / npm
+    if (n >= 2) { log("force stop (second Ctrl-C) — exiting now."); process.exit(130); }
     signalledStop = true;
-    log("stop requested (Ctrl-C) — will exit at the next safe point. Ctrl-C again to force.");
+    log("stop requested (Ctrl-C) — will exit after the current run. Ctrl-C again (a moment later) to force.");
   });
-  const stopNow = () => shouldStop(signalledStop, stopSentinelExists());
+  // Terminal closed: the supervisor forwards SIGHUP. Node's default would kill the loop by signal,
+  // skipping the exit hooks (leaked container); stop softly instead.
+  process.on("SIGHUP", () => {
+    signalledStop = true;
+    log("terminal closed (SIGHUP) — will exit after the current run.");
+  });
+  // AFTER our handler: sandcastle's per-sandbox SIGINT handler would otherwise process.exit(1) on the
+  // first Ctrl-C.
+  shieldSigint();
+  const supervised = process.env[CHILD_ENV] === "1";
+  const startPpid = process.ppid;
+  const stopNow = () => shouldStop(signalledStop, stopSentinelExists()) || (supervised && parentGone(startPpid));
   stopRequested = stopNow;
   clearStopSentinel(); // ignore a stale sentinel left by a previously force-killed run
 

@@ -50,8 +50,11 @@ npm run afk:loop       # the daemon: dispatch -> review -> heal -> merge, foreve
 | `afk` | Single dispatch: implement the next `agent-ready` issue → PR/MR |
 | `afk:review <n>` | Independently review one PR/MR (different model + reviewer identity) |
 | `afk:loop` | The orchestrator daemon (concurrency 1) — dispatch, review, heal, merge |
+| `afk:stop` | Stop a running loop after its current run (works from any terminal) |
 | `afk:claims` | Read-only ownership dashboard for concurrent loops — who claimed what; non-zero exit if contested |
 | `afk:sentinel` | Out-of-band e2e regression sentinel (files agent-ready issues for genuine failures) |
+
+**Stopping the loop.** In its terminal, Ctrl-C once stops it after the current run finishes; Ctrl-C again stops it immediately (the container is removed). `afk:stop` is the same soft stop from anywhere. Two presses less than ~0.75s apart count as one. Closing the terminal is a soft stop. At a terminal the loop runs under a small supervisor in its own process group (so Ctrl-C can't kill the agent run mid-flight); as a consequence Ctrl-Z suspends only the supervisor, not the loop, and with `stty tostop` set the loop pauses on its first output — use tmux, or start it with stdin not a terminal (`pnpm afk:loop < /dev/null`), to opt out.
 
 ## Staying up to date (`afk:update`)
 
