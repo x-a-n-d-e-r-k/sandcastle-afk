@@ -89,7 +89,7 @@ export const superviseInOwnGroup = (o: {
   });
 };
 
-// The supervised child: if the supervisor is gone (killed, terminal closed), stop softly — nothing would
+// The supervised child: if the supervisor is gone (e.g. SIGKILLed), stop softly — nothing would
 // relay a Ctrl-C any more, and an orphaned loop should not run on unseen.
 export const parentGone = (startPpid: number, ppid: () => number = () => process.ppid): boolean =>
   ppid() !== startPpid;

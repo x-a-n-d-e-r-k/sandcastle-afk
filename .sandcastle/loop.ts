@@ -310,7 +310,7 @@ async function main(): Promise<void> {
   //     terminal's SIGINT away from it). A second Ctrl-C force-exits: process.exit runs
   //     sandcastle's exit hook, which removes the container. Any worktree that leaks is
   //     reclaimed by pruneWorktrees next start.
-  //   - The supervisor going away (terminal closed, supervisor killed) is a soft stop too.
+  //   - The terminal closing (SIGHUP) or the supervisor dying is a soft stop too.
   let signalledStop = false;
   const press = presses();
   process.on("SIGINT", () => {
@@ -318,7 +318,13 @@ async function main(): Promise<void> {
     if (n === null) return; // the same keypress, relayed a second time by tsx / npm
     if (n >= 2) { log("force stop (second Ctrl-C) — exiting now."); process.exit(130); }
     signalledStop = true;
-    log("stop requested (Ctrl-C) — will exit after the current run. Ctrl-C again to force.");
+    log("stop requested (Ctrl-C) — will exit after the current run. Ctrl-C again (a moment later) to force.");
+  });
+  // Terminal closed: the supervisor forwards SIGHUP. Node's default would kill the loop by signal,
+  // skipping the exit hooks (leaked container); stop softly instead.
+  process.on("SIGHUP", () => {
+    signalledStop = true;
+    log("terminal closed (SIGHUP) — will exit after the current run.");
   });
   // AFTER our handler: sandcastle's per-sandbox SIGINT handler would otherwise process.exit(1) on the
   // first Ctrl-C.

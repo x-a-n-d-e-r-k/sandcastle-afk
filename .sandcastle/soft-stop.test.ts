@@ -70,6 +70,7 @@ process.on("SIGINT", () => {
   if (n >= 2) { console.log("hard"); process.exit(130); }
   stop = true; console.log("soft");
 });
+process.on("SIGHUP", () => { stop = true; console.log("hup-soft"); });
 shieldSigint();
 process.on("SIGINT", () => { console.log("sandcastle-sigint"); process.exit(1); });
 process.on("exit", () => console.log("exit-teardown"));
@@ -135,4 +136,14 @@ test("unsupervised, a relayed duplicate SIGINT is still one keypress (soft)", { 
   assert.equal(code, 0, out);
   assert.match(out, /soft/);
   assert.doesNotMatch(out, /sandcastle-sigint|hard/);
+});
+
+test("terminal closed (SIGHUP to the supervisor) is a soft stop: the run finishes, then exit 0", { timeout: 20000 }, async () => {
+  const l = startLoop({ SUPERVISE: "1", RUN_MS: "1500" });
+  await l.ready();
+  process.kill(l.p.pid!, "SIGHUP");
+  const code = await l.exited;
+  const out = l.out();
+  assert.equal(code, 0, out);
+  assert.match(out, /hup-soft[\s\S]*run-ended 0/);
 });
