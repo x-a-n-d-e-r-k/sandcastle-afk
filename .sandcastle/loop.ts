@@ -2,7 +2,7 @@ import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandc
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
-import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers } from "./claim.js";
+import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers, inFlightPrs } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
@@ -339,17 +339,18 @@ async function main(): Promise<void> {
         ? ownedIssueNumbers(forge.issueList("--label", MINE), closedClaimed)
         : null;
       // Is this PR's linked issue closed? Multi-loop knows from its claims; single-loop asks the forge.
-      const issueIsClosed = (n: number): boolean => {
+      // "unknown" (the lookup failed) → don't drive the PR this cycle (fail closed, not open).
+      const issueIsClosed = (n: number): boolean | "unknown" => {
         if (Number.isNaN(n)) return false;
         if (MINE) return closedOwned.has(n);
-        try { return forge.issueView(n).state === "closed"; } catch { return false; }
+        try { return forge.issueView(n).state === "closed"; } catch { return "unknown"; }
       };
       const isMine = (headRef: string) => {
         if (!ownedIssues) return true;
         const n = issueNumOf(headRef);
         return !Number.isNaN(n) && ownedIssues.has(n);
       };
-      const active = all.filter((p) => !p.labels.includes(L.needsHuman) && isMine(p.headRef));
+      const active = inFlightPrs(all, L.needsHuman, isMine);
 
       if (DRY) {
         if (active.length) { const pr = active[0]; log(`DRY: in-flight PR #${pr.number} (${pr.headRef}) state=${pr.reviewState}`); }
@@ -368,20 +369,49 @@ async function main(): Promise<void> {
 
           // The linked issue is CLOSED (#88): the forge merged-but-didn't-finalize, or a maintainer
           // closed it. Only finalize a change that already landed; never review/heal/merge it.
-          if (issue && issueIsClosed(Number(issue))) {
-            let landed: boolean | "error";
-            try { landed = landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh }); }
-            catch (e) { log(`PR #${pr.number}: landed check failed (${(e as Error).message.split("\n")[0]})`); landed = "error"; }
-            if (closedIssuePrAction(landed) === "finalize") {
+          const closedState = issue ? issueIsClosed(Number(issue)) : false;
+          if (closedState === "unknown") {
+            log(`PR #${pr.number}: could not read issue #${issue}'s state — not driving it this cycle`);
+            yielded++;
+            continue prs;
+          }
+          if (closedState) {
+            let headExists: boolean | "error";
+            try { const out = forge.prHeadExists(pr.number); headExists = out === "true" ? true : out === "false" ? false : "error"; }
+            catch { headExists = "error"; }
+            const action = closedIssuePrAction({
+              headExists,
+              landed: () => {
+                try { return landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh }); }
+                catch (e) { log(`PR #${pr.number}: landed check failed (${(e as Error).message.split("\n")[0]})`); return "error"; }
+              },
+            });
+            if (action === "wait") {
+              log(`PR #${pr.number}: issue #${issue} is closed; its state can't be determined right now — retrying next cycle`);
+              yielded++;
+              continue prs;
+            }
+            if (action === "orphan") {
+              const n = issueNumOf(branch);
+              handleOrphan(pr, {
+                comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
+                label: (l) => forge.prLabel(pr.number, "--add-label", l),
+                close: () => forge.prClose(pr.number),
+                releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
+                log,
+              });
+            } else if (action === "finalize") {
               log(`PR #${pr.number}: issue #${issue} is closed and its change is on ${cfg.defaultBranch} -> closing the PR`);
               forge.prComment(pr.number, "--body", JSON.stringify(`AFK: this change is already on ${cfg.defaultBranch} and issue #${issue} is closed — closing this PR so it is not merged again.`));
               forge.prClose(pr.number);
               closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
-              break prs;
+            } else {
+              // park: out of flight (needs-human PRs aren't active), so new work dispatches again.
+              log(`PR #${pr.number}: issue #${issue} is closed but this change is NOT on ${cfg.defaultBranch} -> parking for a human`);
+              escalate(pr.number, `issue #${issue} is closed but this PR's change is not on ${cfg.defaultBranch}, so the loop won't review or merge it. Close this PR, or reopen the issue and remove \`${L.needsHuman}\` to resume it`);
+              if (MINE) forge.issueEdit(Number(issue), "--remove-label", MINE);
             }
-            log(`PR #${pr.number}: issue #${issue} is closed but this change is NOT on ${cfg.defaultBranch} — leaving it for a human (not reviewing or merging)`);
-            yielded++;
-            continue prs;
+            break prs;
           }
 
           // Conflicts with the base branch block BOTH review and merge, so resolve them

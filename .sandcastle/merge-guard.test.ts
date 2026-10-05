@@ -148,8 +148,17 @@ test("#88 a GENUINE failure (nothing landed, still open) → merge-pending: no c
   assert.deepEqual(calls, ["pr-merge"]);
 });
 
-test("#88 a PR whose issue is CLOSED is only finalized when its change landed — never reviewed/healed/merged", () => {
-  assert.equal(mg.closedIssuePrAction(true), "finalize");
-  assert.equal(mg.closedIssuePrAction(false), "leave", "e.g. a maintainer closed the issue as not planned");
-  assert.equal(mg.closedIssuePrAction("error"), "leave", "fail closed: can't tell → don't act");
+test("#88 a PR whose issue is CLOSED: every definite answer takes it OUT of flight; only a transient error waits", () => {
+  const a = (headExists: boolean | "error", landed: boolean | "error") => mg.closedIssuePrAction({ headExists, landed: () => landed });
+  assert.equal(a(true, true), "finalize", "already on base → close the PR, release the claim");
+  assert.equal(a(true, false), "park", "not on base (e.g. closed as not planned) → needs-human, never merged — and no longer blocks dispatch");
+  assert.equal(a(false, "error"), "orphan", "branch gone → orphan handling (the landed check would only error forever)");
+  assert.equal(a("error", true), "wait", "head check failed → retry next cycle");
+  assert.equal(a(true, "error"), "wait", "landed check failed → retry next cycle");
+});
+
+test("#88 the landed check is not even attempted for an orphan (its fetch would fail)", () => {
+  let called = false;
+  assert.equal(mg.closedIssuePrAction({ headExists: false, landed: () => { called = true; return "error"; } }), "orphan");
+  assert.equal(called, false);
 });

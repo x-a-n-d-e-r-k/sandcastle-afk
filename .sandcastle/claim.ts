@@ -36,6 +36,12 @@ export const claimWinner = (labels: string[]): string | undefined =>
 export const ownedIssueNumbers = (openClaimed: { number: number }[], closedClaimed: { number: number }[]): Set<number> =>
   new Set([...openClaimed, ...closedClaimed].map((i) => i.number));
 
+// The agent PRs this loop drives this cycle: its own, minus those parked for a human. New work is only
+// dispatched when this is EMPTY — so anything the loop can't act on must leave it (be parked), not just
+// be skipped, or one stuck PR blocks dispatch forever (#88 review).
+export const inFlightPrs = <P extends { headRef: string; labels: string[] }>(prs: P[], needsHuman: string, isMine: (headRef: string) => boolean): P[] =>
+  prs.filter((p) => !p.labels.includes(needsHuman) && isMine(p.headRef));
+
 // Everything pickNextIssue touches, injected so it's testable without a live forge.
 export type PickDeps = {
   listReady: () => Issue[];

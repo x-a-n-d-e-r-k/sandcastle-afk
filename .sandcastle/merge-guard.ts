@@ -27,10 +27,19 @@ export function closeLinkedIssue(issue: number, pr: number, d: IssueCloseDeps): 
 
 // A PR whose linked issue is CLOSED (#88 review): the forge may have merged it but left it open (then
 // the issue closed via Closes #N), or a maintainer closed the issue as "not planned". Either way the
-// loop must not review, heal or MERGE it — only finalize it when its change is already on base.
-// "error" (the landed check failed) → leave it this cycle.
-export const closedIssuePrAction = (landed: boolean | "error"): "finalize" | "leave" =>
-  landed === true ? "finalize" : "leave";
+// loop must not review, heal or MERGE it. But it must not merely skip it either: an in-flight PR keeps
+// the loop from dispatching new work, so every DEFINITE answer takes the PR out of flight:
+//   - source branch missing → "orphan"   (#61 handling: label, close, release the claim)
+//   - change already on base → "finalize" (comment, close the PR, release the claim)
+//   - change NOT on base     → "park"     (needs-human with a comment — a person decides)
+// Only a transient failure (head or landed check errored) → "wait": skip it this cycle.
+export type ClosedIssuePrAction = "orphan" | "finalize" | "park" | "wait";
+export const closedIssuePrAction = (o: { headExists: boolean | "error"; landed: () => boolean | "error" }): ClosedIssuePrAction => {
+  if (o.headExists === "error") return "wait";
+  if (o.headExists === false) return "orphan";
+  const l = o.landed();
+  return l === "error" ? "wait" : l ? "finalize" : "park";
+};
 
 // --- merge guard (#71) -----------------------------------------------------------------------
 // A degraded GitLab carried out one `pr-merge --squash` six times server-side and left the MR
