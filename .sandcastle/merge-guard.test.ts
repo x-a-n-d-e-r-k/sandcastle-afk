@@ -147,3 +147,9 @@ test("#88 a GENUINE failure (nothing landed, still open) → merge-pending: no c
   assert.equal(mg.guardedMerge(953, deps), "merge-pending");
   assert.deepEqual(calls, ["pr-merge"]);
 });
+
+test("#88 a PR whose issue is CLOSED is only finalized when its change landed — never reviewed/healed/merged", () => {
+  assert.equal(mg.closedIssuePrAction(true), "finalize");
+  assert.equal(mg.closedIssuePrAction(false), "leave", "e.g. a maintainer closed the issue as not planned");
+  assert.equal(mg.closedIssuePrAction("error"), "leave", "fail closed: can't tell → don't act");
+});

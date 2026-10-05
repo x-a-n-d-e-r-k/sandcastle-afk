@@ -77,6 +77,14 @@ merge >/dev/null 2>&1 || fail "a timeout where the MR did merge must succeed"
 [[ "$(n_merge_calls)" == 1 ]] || fail "one request on a timeout"
 cp "$TMP/curl.ok" "$TMP/curl"
 
+# --- 4b) token sources: GITLAB_ACCESS_TOKEN as PRIVATE-TOKEN; OAUTH_TOKEN as a Bearer token ------
+reset
+GITLAB_TOKEN= GITLAB_ACCESS_TOKEN=glpat-access CODE=200 merge >/dev/null || fail "GITLAB_ACCESS_TOKEN works"
+grep -q "PRIVATE-TOKEN: glpat-access" "$HDR_SEEN" || fail "GITLAB_ACCESS_TOKEN is sent as PRIVATE-TOKEN"
+reset
+GITLAB_TOKEN= OAUTH_TOKEN=oauth-xyz CODE=200 merge >/dev/null || fail "OAUTH_TOKEN works"
+grep -q "Authorization: Bearer oauth-xyz" "$HDR_SEEN" || fail "OAUTH_TOKEN is sent as a Bearer token"
+
 # --- 5) GitHub is unchanged ------------------------------------------------------------------
 reset
 PLAT=github merge || fail "[github] pr-merge"

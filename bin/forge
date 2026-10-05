@@ -109,7 +109,7 @@ case "$verb" in
       # glab `issue list`: state is --opened/--closed/--all (no --state); JSON is --output (not -F).
       gl=(); case "$state" in closed) gl=(--closed);; all) gl=(--all);; esac
       lbl=(); [[ ${#labels[@]} -gt 0 ]] && lbl=(--label "$(csv "${labels[@]}")")
-      glab issue list ${gl[@]+"${gl[@]}"} ${lbl[@]+"${lbl[@]}"} --output json \
+      glab issue list ${gl[@]+"${gl[@]}"} ${lbl[@]+"${lbl[@]}"} --per-page 100 --output json \
         | jq '[.[] | {number: .iid, title, labels: (.labels // [])}]'
     fi ;;
 
@@ -479,11 +479,12 @@ case "$verb" in
       [[ -n "$head_sha" ]] || die "pr-merge: MR !$NUM has no head sha (source branch missing?) — not merging"
       api="${GITLAB_API_URL:-$(jq -r '.web_url | capture("^(?<b>https?://[^/]+)").b' <<<"$mr")/api/v4}"
       host="$(sed -E 's#^https?://([^/]+).*#\1#' <<<"$api")"
-      tok="${GITLAB_TOKEN:-${GLAB_TOKEN:-}}"
+      tok="${GITLAB_TOKEN:-${GITLAB_ACCESS_TOKEN:-${GLAB_TOKEN:-}}}"; auth="PRIVATE-TOKEN: "
+      if [[ -z "$tok" && -n "${OAUTH_TOKEN:-}" ]]; then tok="$OAUTH_TOKEN"; auth="Authorization: Bearer "; fi
       [[ -n "$tok" ]] || tok="$(glab config get token --host "$host" 2>/dev/null || true)"
       [[ -n "$tok" ]] || die "pr-merge: no GitLab token (set GITLAB_TOKEN, or log in with glab)"
       hdr="$(mktemp)"; resp="$(mktemp)"; chmod 600 "$hdr"
-      printf 'PRIVATE-TOKEN: %s\n' "$tok" > "$hdr"   # header from a file: the token never appears in argv
+      printf '%s%s\n' "$auth" "$tok" > "$hdr"   # header from a file: the token never appears in argv
       set +e
       code="$(curl -sS --max-time 120 -o "$resp" -w '%{http_code}' -X PUT -H @"$hdr" \
         --data-urlencode "sha=$head_sha" \
@@ -496,13 +497,13 @@ case "$verb" in
       if [[ $rc -eq 0 && "$code" =~ ^2 ]]; then cat "$resp"; rm -f "$resp"; exit 0; fi
       body="$(head -c 300 "$resp" 2>/dev/null || true)"; rm -f "$resp"
       # Unknown outcome: did the merge actually happen?
-      state="$(glab mr view "$NUM" -F json | jq -r '.state')"
-      if [[ "$state" == merged ]]; then
+      mr_state="$(glab mr view "$NUM" -F json | jq -r '.state')"
+      if [[ "$mr_state" == merged ]]; then
         # stdout, not stderr: the retry wrapper only surfaces stderr when a verb fails.
         echo "forge: pr-merge got HTTP ${code:-none} (curl rc $rc) but !$NUM IS merged — treating as success"
         exit 0
       fi
-      die "pr-merge: merge request answered HTTP ${code:-none} (curl rc $rc) and !$NUM is still '$state': $body"
+      die "pr-merge: merge request answered HTTP ${code:-none} (curl rc $rc) and !$NUM is still '$mr_state': $body"
     fi ;;
 
   pr-label)

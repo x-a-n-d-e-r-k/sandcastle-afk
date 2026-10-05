@@ -25,6 +25,13 @@ export function closeLinkedIssue(issue: number, pr: number, d: IssueCloseDeps): 
   return "closed";
 }
 
+// A PR whose linked issue is CLOSED (#88 review): the forge may have merged it but left it open (then
+// the issue closed via Closes #N), or a maintainer closed the issue as "not planned". Either way the
+// loop must not review, heal or MERGE it — only finalize it when its change is already on base.
+// "error" (the landed check failed) → leave it this cycle.
+export const closedIssuePrAction = (landed: boolean | "error"): "finalize" | "leave" =>
+  landed === true ? "finalize" : "leave";
+
 // --- merge guard (#71) -----------------------------------------------------------------------
 // A degraded GitLab carried out one `pr-merge --squash` six times server-side and left the MR
 // `opened` + approved + green: exactly the state in which the next cycle merges again, and every

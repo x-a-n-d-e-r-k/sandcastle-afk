@@ -10,7 +10,7 @@ import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiF
 import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
 import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
-import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, type IssueCloseDeps } from "./merge-guard.js";
+import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, closedIssuePrAction, type IssueCloseDeps } from "./merge-guard.js";
 import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
 import { afterImplement, issueFingerprint, DEFAULT_MAX_NO_PR_RUNS } from "./no-pr.js";
@@ -333,9 +333,17 @@ async function main(): Promise<void> {
       // Query the claim label directly (not the `ready` set) so ownership survives even if
       // `ready` is stripped once a PR opens. Single-loop (MINE === "") leaves it null so
       // isMine is always true and the loop owns every PR (unchanged behavior).
+      const closedClaimed = MINE ? forge.issueList("--label", MINE, "--state", "closed") : [];
+      const closedOwned = new Set(closedClaimed.map((i) => i.number));
       const ownedIssues = MINE
-        ? ownedIssueNumbers(forge.issueList("--label", MINE), forge.issueList("--label", MINE, "--state", "closed"))
+        ? ownedIssueNumbers(forge.issueList("--label", MINE), closedClaimed)
         : null;
+      // Is this PR's linked issue closed? Multi-loop knows from its claims; single-loop asks the forge.
+      const issueIsClosed = (n: number): boolean => {
+        if (Number.isNaN(n)) return false;
+        if (MINE) return closedOwned.has(n);
+        try { return forge.issueView(n).state === "closed"; } catch { return false; }
+      };
       const isMine = (headRef: string) => {
         if (!ownedIssues) return true;
         const n = issueNumOf(headRef);
@@ -357,6 +365,24 @@ async function main(): Promise<void> {
         prs: for (const pr of active) {
           const branch = pr.headRef;
           const issue = branch.match(/issue-(\d+)/)?.[1] ?? "";
+
+          // The linked issue is CLOSED (#88): the forge merged-but-didn't-finalize, or a maintainer
+          // closed it. Only finalize a change that already landed; never review/heal/merge it.
+          if (issue && issueIsClosed(Number(issue))) {
+            let landed: boolean | "error";
+            try { landed = landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh }); }
+            catch (e) { log(`PR #${pr.number}: landed check failed (${(e as Error).message.split("\n")[0]})`); landed = "error"; }
+            if (closedIssuePrAction(landed) === "finalize") {
+              log(`PR #${pr.number}: issue #${issue} is closed and its change is on ${cfg.defaultBranch} -> closing the PR`);
+              forge.prComment(pr.number, "--body", JSON.stringify(`AFK: this change is already on ${cfg.defaultBranch} and issue #${issue} is closed — closing this PR so it is not merged again.`));
+              forge.prClose(pr.number);
+              closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
+              break prs;
+            }
+            log(`PR #${pr.number}: issue #${issue} is closed but this change is NOT on ${cfg.defaultBranch} — leaving it for a human (not reviewing or merging)`);
+            yielded++;
+            continue prs;
+          }
 
           // Conflicts with the base branch block BOTH review and merge, so resolve them
           // first (#54): a host-side `git merge` honours .gitattributes merge drivers the forge's
@@ -553,10 +579,10 @@ async function main(): Promise<void> {
           }
           break prs; // this PR was this cycle's work
         }
-        // Every active PR only had a stale conflict flag: nothing ran, so wait a poll interval
+        // Every active PR yielded (stale conflict flag / closed issue): nothing ran, so wait a poll interval
         // for the forge to recompute rather than spinning. (No new dispatch: they're in flight.)
         if (yielded === active.length) {
-          log(`all ${yielded} in-flight PR(s) had stale conflict flags — rechecked; sleeping ${cfg.pollMinutes}m`);
+          log(`all ${yielded} in-flight PR(s) were waiting (stale conflict flag, or a closed issue left for a human); sleeping ${cfg.pollMinutes}m`);
           await sleepUnlessStopped(POLL_MS, stopNow);
         }
       } else {
