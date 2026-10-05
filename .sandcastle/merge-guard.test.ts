@@ -162,3 +162,24 @@ test("#88 the landed check is not even attempted for an orphan (its fetch would 
   assert.equal(mg.closedIssuePrAction({ headExists: false, landed: () => { called = true; return "error"; } }), "orphan");
   assert.equal(called, false);
 });
+
+test("#88 real git: an abandoned PR that CONFLICTS with base → 'not landed' → park (not wait forever); the pre-merge guard still throws", () => {
+  const dir = mkdtempSync(join(tmpdir(), "afk-conflict-park-"));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const run = (c: string, cwd: string) => execSync(c, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const g = (cwd: string, c: string) => run(`git -c user.name=t -c user.email=t@t -c init.defaultBranch=main ${c}`, cwd);
+  try {
+    const origin = join(dir, "origin.git"), seed = join(dir, "seed"), host = join(dir, "host");
+    g(dir, `init -q --bare ${origin}`); g(dir, `clone -q ${origin} ${seed}`);
+    writeFileSync(join(seed, "a.txt"), "one\n"); g(seed, "add -A"); g(seed, "commit -q -m init"); g(seed, "push -q origin HEAD:main");
+    g(seed, "checkout -q -b agent/issue-433"); writeFileSync(join(seed, "a.txt"), "branch version\n");
+    g(seed, "commit -qam pr"); g(seed, "push -q origin agent/issue-433");
+    g(seed, "checkout -q main"); writeFileSync(join(seed, "a.txt"), "main moved on\n");
+    g(seed, "commit -qam later"); g(seed, "push -q origin main");
+    g(dir, `clone -q ${origin} ${host}`);
+    const o = { repo: host, base: "main", branch: "agent/issue-433", run };
+    assert.throws(() => mg.landedOnBase(o), "default (pre-merge guard): a conflict throws → don't merge this cycle");
+    assert.equal(mg.landedOnBase({ ...o, conflictMeansNotLanded: true }), false, "closed-issue path: a conflict means not on base");
+    assert.equal(mg.closedIssuePrAction({ headExists: true, landed: () => mg.landedOnBase({ ...o, conflictMeansNotLanded: true }) }), "park");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

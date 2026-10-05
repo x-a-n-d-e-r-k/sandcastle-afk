@@ -55,10 +55,19 @@ export const alreadyLanded = (baseTree: string, mergedTree: string): boolean =>
 
 // Git side of the check. Throws on ANY git error (including a conflicting merge-tree, which exits
 // non-zero) — the caller treats a throw as "don't merge this cycle", never as "merge anyway".
-export const landedOnBase = (o: { repo: string; base: string; branch: string; run: Run }): boolean => {
+// `conflictMeansNotLanded`: a merge-tree CONFLICT (exit 1) answers "not landed" instead of throwing.
+// The pre-merge guard keeps the default (throw → don't merge this cycle). The closed-issue path (#88)
+// sets it: an abandoned PR usually conflicts with a base that moved on, and treating that as a
+// transient error left it in flight forever. Fetch / rev-parse failures always throw.
+export const landedOnBase = (o: { repo: string; base: string; branch: string; run: Run; conflictMeansNotLanded?: boolean }): boolean => {
   o.run(`git fetch -q origin ${o.base} ${o.branch}`, o.repo);
   const baseTree = o.run(`git rev-parse origin/${o.base}^{tree}`, o.repo);
-  const mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim();
+  let mergedTree: string;
+  try { mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim(); }
+  catch (e) {
+    if (o.conflictMeansNotLanded && (e as { status?: number }).status === 1) return false;
+    throw e;
+  }
   return alreadyLanded(baseTree, mergedTree);
 };
 

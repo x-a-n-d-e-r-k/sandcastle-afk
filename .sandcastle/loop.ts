@@ -382,7 +382,7 @@ async function main(): Promise<void> {
             const action = closedIssuePrAction({
               headExists,
               landed: () => {
-                try { return landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh }); }
+                try { return landedOnBase({ repo: ROOT, base: cfg.defaultBranch, branch, run: sh, conflictMeansNotLanded: true }); }
                 catch (e) { log(`PR #${pr.number}: landed check failed (${(e as Error).message.split("\n")[0]})`); return "error"; }
               },
             });
@@ -406,10 +406,11 @@ async function main(): Promise<void> {
               forge.prClose(pr.number);
               closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
             } else {
-              // park: out of flight (needs-human PRs aren't active), so new work dispatches again.
+              // park: out of flight (needs-human PRs aren't active), so new work dispatches again. The claim
+              // is KEPT: if a human reopens the issue and removes the label, the PR resumes under this loop
+              // (released, it would sit unowned — pickNextIssue won't re-claim an issue with an open PR).
               log(`PR #${pr.number}: issue #${issue} is closed but this change is NOT on ${cfg.defaultBranch} -> parking for a human`);
-              escalate(pr.number, `issue #${issue} is closed but this PR's change is not on ${cfg.defaultBranch}, so the loop won't review or merge it. Close this PR, or reopen the issue and remove \`${L.needsHuman}\` to resume it`);
-              if (MINE) forge.issueEdit(Number(issue), "--remove-label", MINE);
+              escalate(pr.number, `issue #${issue} is closed but this PR's change is not on ${cfg.defaultBranch}, so the loop won't review or merge it. Close this PR, or reopen the issue and remove \`${L.needsHuman}\` from this PR to resume it`);
             }
             break prs;
           }
