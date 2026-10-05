@@ -16,7 +16,9 @@ export type IssueCloseDeps = {
 // GitLab merged the MR but left `Closes #N` unapplied, and the still-open, still-claimed issue was
 // resumed into a fresh PR for work that had already shipped.
 export function closeLinkedIssue(issue: number, pr: number, d: IssueCloseDeps): "closed" | "already-closed" {
-  if (d.issueState(issue) !== "open") return "already-closed";
+  // The claim is released either way (#88): a claim left on a CLOSED issue kept an orphaned PR
+  // "owned" by nobody's reckoning — and is stale bookkeeping in any case.
+  if (d.issueState(issue) !== "open") { d.releaseClaim(issue); return "already-closed"; }
   d.log(`#${issue} still open after PR #${pr} merged — closing it and releasing the claim (the forge did not auto-close it)`);
   d.closeIssue(issue, `AFK: closed after PR #${pr} merged — the forge did not auto-close it.`);
   d.releaseClaim(issue);
@@ -70,7 +72,11 @@ export function guardedMerge(pr: number, d: MergeDeps): MergeOutcome {
     return "finalized-landed";
   }
 
-  d.merge();
+  // A failed merge CALL is an unknown outcome, not a failure (#88): a self-hosted GitLab merged and then
+  // answered 500. Fall through to the same post-merge check — merged / landed-but-open → finalize /
+  // genuinely not merged → leave it for the next cycle (never a second merge in this one).
+  try { d.merge(); }
+  catch (e) { d.log(`PR #${pr}: the merge call failed (${(e as Error).message.split("\n")[0]}) — outcome unknown, checking whether it landed`); }
   if (!d.stillOpen()) { d.log(`merged #${pr}`); d.closeIssue(); return "merged"; }
 
   // The merge call returned but the PR still reads open. If the change landed anyway, the forge

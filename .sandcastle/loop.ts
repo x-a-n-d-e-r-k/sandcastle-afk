@@ -2,7 +2,7 @@ import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandc
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
-import { pickNextIssue, realPickDeps, MINE, issueNumOf } from "./claim.js";
+import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
@@ -334,7 +334,7 @@ async function main(): Promise<void> {
       // `ready` is stripped once a PR opens. Single-loop (MINE === "") leaves it null so
       // isMine is always true and the loop owns every PR (unchanged behavior).
       const ownedIssues = MINE
-        ? new Set(forge.issueList("--label", MINE).map((i) => i.number))
+        ? ownedIssueNumbers(forge.issueList("--label", MINE), forge.issueList("--label", MINE, "--state", "closed"))
         : null;
       const isMine = (headRef: string) => {
         if (!ownedIssues) return true;

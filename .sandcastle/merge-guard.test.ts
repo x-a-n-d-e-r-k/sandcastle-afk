@@ -31,10 +31,10 @@ test("#70 post-merge: an issue the forge left open gets exactly one close and on
   assert.deepEqual(calls, ["close 427", "release 427"]);
 });
 
-test("#70 post-merge: an issue the forge already closed gets neither", () => {
+test("#70 post-merge: an issue the forge already closed is not closed again — but its claim IS released (#88)", () => {
   const { calls, deps } = recorder({ 427: "closed" });
   assert.equal(mg.closeLinkedIssue(427, 951, deps), "already-closed");
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ["release 427"]);
 });
 
 // --- #71 merge guard -----------------------------------------------------------------------------
@@ -120,4 +120,30 @@ test("#71 git version gate: >= 2.38 supports merge-tree --write-tree; older refu
     assert.equal(mg.gitSupportsMergeTree(v), false, v);
   assert.throws(() => mg.assertGitSupportsMergeTree("git version 2.34.1"), /git >= 2\.38.*found "git version 2\.34\.1"/);
   assert.doesNotThrow(() => mg.assertGitSupportsMergeTree("git version 2.38.1"));
+});
+
+// --- #88: a failed merge CALL is an unknown outcome -------------------------------------------------
+
+const throwingMerge = (o: { landed: boolean[]; openAfterMerge: boolean }) => {
+  const f = mergeFake(o);
+  f.deps.merge = () => { f.calls.push("pr-merge"); throw new Error("Command failed: forge pr-merge 953 — HTTP 500"); };
+  return f;
+};
+
+test("#88 the server merged, then the call failed, and the MR stayed open → finalized (closed + issue), NO second merge", () => {
+  const { calls, deps } = throwingMerge({ landed: [false, true], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(953, deps), "finalized-after-merge");
+  assert.deepEqual(calls, ["pr-merge", "pr-close:not-finalized", "issue-close"]);
+});
+
+test("#88 the call failed but the forge DID finalize the merge → merged (the cycle doesn't error)", () => {
+  const { calls, deps } = throwingMerge({ landed: [false], openAfterMerge: false });
+  assert.equal(mg.guardedMerge(953, deps), "merged");
+  assert.deepEqual(calls, ["pr-merge", "issue-close"]);
+});
+
+test("#88 a GENUINE failure (nothing landed, still open) → merge-pending: no close, retried next cycle by the loop", () => {
+  const { calls, deps } = throwingMerge({ landed: [false, false], openAfterMerge: true });
+  assert.equal(mg.guardedMerge(953, deps), "merge-pending");
+  assert.deepEqual(calls, ["pr-merge"]);
 });

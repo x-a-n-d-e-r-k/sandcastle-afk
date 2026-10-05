@@ -30,6 +30,12 @@ export const claimWinner = (labels: string[]): string | undefined =>
     .map((l) => l.slice(WORKING.length + 1))
     .sort()[0];
 
+// The issues whose agent PRs THIS loop drives (#8): its claimed issues — open AND closed (#88). A forge
+// that merged an MR but left it open closes the issue (via Closes #N) while the MR stays open; counting
+// only OPEN claimed issues orphaned that MR for every loop, so the merge guard could never finalize it.
+export const ownedIssueNumbers = (openClaimed: { number: number }[], closedClaimed: { number: number }[]): Set<number> =>
+  new Set([...openClaimed, ...closedClaimed].map((i) => i.number));
+
 // Everything pickNextIssue touches, injected so it's testable without a live forge.
 export type PickDeps = {
   listReady: () => Issue[];

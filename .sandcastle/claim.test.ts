@@ -226,3 +226,11 @@ test("#86: a stale own claim on a needs-human issue is released, not resumed (th
   assert.equal(await pickNextIssue([], d), undefined);
   assert.deepEqual(d.edits, ["remove 2732 working:a"]);
 });
+
+// --- #88: an MR left open after its issue was closed is still OWNED (not orphaned) ---------------
+const { ownedIssueNumbers } = await import("./claim.js");
+
+test("#88: owned issues = this loop's claimed issues, open AND closed", () => {
+  const owned = ownedIssueNumbers([{ number: 1 }, { number: 2 }], [{ number: 433 }]);
+  assert.deepEqual([...owned].sort((a, b) => a - b), [1, 2, 433], "the closed-but-claimed issue's open MR stays drivable");
+});
