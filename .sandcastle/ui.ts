@@ -149,9 +149,22 @@ export const persistedRenderInputs = (pr: number, branch: string = DEFAULT_ARTIF
   } catch { return []; }
 };
 
+/**
+ * UI-relevant files that differ between two commits: the verifyGlobs matches, plus anything under
+ * canonDir (the reviewer compares the render against it). Two-dot, NOT the PR's own diff: a base
+ * merge that changed shared UI makes an earlier render stale too. Throws if a commit isn't present.
+ */
+export const uiChangedBetween = (a: string, b: string, ui: UiCfg, run: (c: string) => string = sh): string[] => {
+  const changed = run(`git diff --name-only ${a} ${b}`).split("\n").map((s) => s.trim()).filter(Boolean);
+  const canon = ui.canonDir ? ui.canonDir.replace(/\/+$/, "") + "/" : null;
+  return changed.filter((f) => matchesAnyGlob(f, ui.verifyGlobs) || (canon !== null && f.startsWith(canon)));
+};
+
 export type UiGate =
   | { required: false }
-  | { required: true; blocked: false; files: string[]; artifacts: string[] }
+  // carriedFrom: the screenshots were rendered at that earlier commit, and no UI file changed between
+  // it and the head (a base merge, a backend-only fix) — so they still show what the head renders.
+  | { required: true; blocked: false; files: string[]; artifacts: string[]; carriedFrom?: string }
   // kind "missing": the diff resolved and no screenshots exist for the CURRENT head — the one case
   // a re-render can fix (#67). kind "error": the diff/head couldn't be resolved (fail closed, #18).
   | { required: true; blocked: true; kind: "missing" | "error"; files: string[]; artifacts: string[]; reason: string };
@@ -178,6 +191,8 @@ export const uiGate = (
     changed?: (base: string, head: string) => string[];
     headSha?: (branch: string) => string;
     artifacts?: (pr: number, headSha: string, branch: string) => string[];
+    renderedHeads?: (pr: number, branch: string) => string[];
+    uiChanged?: (a: string, b: string) => string[];
   } = {},
 ): UiGate => {
   if (!ui || !ui.verifyGlobs?.length) return { required: false };
@@ -205,6 +220,19 @@ export const uiGate = (
   // (e.g. before a heal rewrote the UI) no longer count — that is the #35 fix.
   const artifacts = arts(pr, sha, artifactBranch(ui));
   if (!artifacts.length) {
+    // Keyed to the exact head, a render went stale on EVERY head move — including a merge from the
+    // base branch that touched no UI — so a busy base never let a finished UI PR converge (re-render,
+    // base moves, re-render, …, heal cap). Carry an earlier render forward when no UI file (verifyGlobs,
+    // canonDir) changed between it and the head. A heal that rewrote UI still needs a fresh render (#35).
+    const heads = deps.renderedHeads ?? ((n, b) => renderedHeads(n, b));
+    const uiChanged = deps.uiChanged ?? ((a, b) => uiChangedBetween(a, b, ui));
+    for (const s of heads(pr, artifactBranch(ui)).filter((x) => x !== sha)) {
+      let same = false;
+      try { same = uiChanged(s, sha).length === 0; } catch { /* that commit is gone (force-push): not a basis */ }
+      if (!same) continue;
+      const carried = arts(pr, s, artifactBranch(ui));
+      if (carried.length) return { required: true, blocked: false, files, artifacts: carried, carriedFrom: s };
+    }
     return {
       required: true, blocked: true, kind: "missing", files, artifacts,
       reason: `PR #${pr} changes ${files.length} UI file(s) (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""}) but published no screenshots to ${artifactBranch(ui)}:${artifactPrefix(pr, sha)} for the current head ${sha.slice(0, 8)}. Green checks do not prove a UI change renders; a heal since the last render needs a fresh one.`,
@@ -273,8 +301,12 @@ Do not open a UI-touching PR without published screenshots — it cannot merge.`
 export const reviewUiBlock = (gate: UiGate, ui: UiCfg | undefined): string => {
   if (!ui || !gate.required) return "";
   const canon = ui.canonDir ? `\n- Compare against canon in \`${ui.canonDir}\`. Reject a render that disagrees with it.` : "";
+  const from = "carriedFrom" in gate ? gate.carriedFrom : undefined;
+  const carried = from
+    ? `\n\nThese were rendered at \`${from.slice(0, 8)}\`. No UI file (\`ui.verifyGlobs\`${ui.canonDir ? ", `ui.canonDir`" : ""}) changed between that commit and this head, so they still show what this head renders. Do NOT block for want of screenshots of the exact head SHA.`
+    : "";
   const list = gate.artifacts.length
-    ? `Published screenshots (branch \`${artifactBranch(ui)}\`):\n${gate.artifacts.map((a) => `- \`${a}\``).join("\n")}`
+    ? `Published screenshots (branch \`${artifactBranch(ui)}\`):\n${gate.artifacts.map((a) => `- \`${a}\``).join("\n")}${carried}`
     : `**No screenshots were published.** This PR cannot merge. Request changes and say so.`;
   return `## Visual verification (this PR touches UI)
 
