@@ -26,12 +26,15 @@ export type MechanicalOutcome = "merged" | "conflicted";
 // pushed. Anything else (fetch/push failure) throws for the caller to decide.
 export const mechanicalMerge = (o: {
   repo: string; branch: string; base: string; identity: GitIdentity; run?: Run;
+  /** Called after a successful push with the head before and after the merge. */
+  onMerged?: (oldHead: string, newHead: string) => void;
 }): MechanicalOutcome => {
   const run = o.run ?? sh;
   run(`git fetch origin ${o.base} ${o.branch}`, o.repo);
   const wt = mkdtempSync(join(tmpdir(), "afk-merge-"));
   try {
     run(`git worktree add --detach ${shq(wt)} origin/${o.branch}`, o.repo);
+    const oldHead = run("git rev-parse HEAD", wt).trim();
     const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
     try {
       run(`git ${as} merge --no-edit origin/${o.base}`, wt);
@@ -40,12 +43,43 @@ export const mechanicalMerge = (o: {
       return "conflicted";
     }
     run(`git push origin HEAD:refs/heads/${o.branch}`, wt);
+    o.onMerged?.(oldHead, run("git rev-parse HEAD", wt).trim());
     return "merged";
   } finally {
     try { run(`git worktree remove --force ${shq(wt)}`, o.repo); } catch {}
     rmSync(wt, { recursive: true, force: true });
     try { run("git worktree prune", o.repo); } catch {}
   }
+};
+
+// ---------------------------------------------------------------------------
+// Does a mechanical base merge need a re-review?
+//
+// The forge's conflict check ignores `merge=union`, so a PR that adds a CHANGELOG entry reads as
+// conflicting after EVERY landing that also added one. The host merges cleanly, pushes, and the PR
+// used to get a full re-review each time (~12 minutes in one consumer) although none of its own
+// changes moved. The merge brings in only base changes; when those touch none of the PR's own files
+// — or only files merged with `merge=union` (both sides' lines kept, nothing of the PR's rewritten) —
+// the PR's change is what was reviewed, so the review stands. An overlap with any other file still
+// re-reviews: a clean textual merge of two edits to the same file can still be wrong.
+// ---------------------------------------------------------------------------
+
+const names = (out: string): string[] => out.split("\n").map((s) => s.trim()).filter(Boolean);
+
+/** The PR's own files the base merge also changed, minus `merge=union` files. Throws on a git error. */
+export const baseMergeOverlap = (o: { repo: string; base: string; oldHead: string; newHead: string; run?: Run }): string[] => {
+  const run = o.run ?? sh;
+  // The PR's own change as of before the merge: merge-base(oldHead, base)..oldHead.
+  const mb = run(`git merge-base ${shq(o.oldHead)} origin/${o.base}`, o.repo).trim();
+  const own = new Set(names(run(`git diff --name-only ${mb} ${shq(o.oldHead)}`, o.repo)));
+  const overlap = names(run(`git diff --name-only ${shq(o.oldHead)} ${shq(o.newHead)}`, o.repo)).filter((f) => own.has(f));
+  return overlap.filter((f) => !isUnionMerged(o.repo, o.newHead, f, run));
+};
+
+// The merge attribute as of the merged commit (the PR's own .gitattributes could differ from the host's).
+const isUnionMerged = (repo: string, rev: string, file: string, run: Run): boolean => {
+  try { return /: merge: union$/m.test(run(`git check-attr --source ${shq(rev)} merge -- ${shq(file)}`, repo)); }
+  catch { return false; }
 };
 
 // The base tip to measure an agent resolution against, captured BEFORE the agent runs: if

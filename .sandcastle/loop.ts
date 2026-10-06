@@ -8,7 +8,7 @@ import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped }
 import { presses, shieldSigint, shouldSupervise, superviseInOwnGroup, parentGone, CHILD_ENV } from "./soft-stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
 import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
-import { handleConflict, mechanicalMerge, baseTip, branchContains, type ConflictResult } from "./conflicts.js";
+import { handleConflict, mechanicalMerge, baseTip, branchContains, baseMergeOverlap, type ConflictResult } from "./conflicts.js";
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
 import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, closedIssuePrAction, type IssueCloseDeps } from "./merge-guard.js";
@@ -281,6 +281,19 @@ const healDeps = (pr: number, branch: string, issue: string, finding: () => stri
 export const afterConflict = (o: ConflictResult): "next-pr" | "end-cycle" =>
   o === "stale-flag" ? "next-pr" : "end-cycle";
 
+// A forge that dismisses approvals on push (branch protection) would turn a kept review into a fresh
+// "needs review". Re-approve, as the reviewer, only a PR that WAS approved before the base merge, saying
+// why. Internal review mode only: in external mode the approval is a human's to give.
+function keepApproval(pr: number, before: string, m: { oldHead: string; newHead: string }) {
+  if (before !== "APPROVED" || EXTERNAL) return;
+  try {
+    if (forge.prList().find((p) => p.number === pr)?.reviewState === "APPROVED") return;
+    forge.prApprove(pr, "--as-reviewer", "--body", JSON.stringify(
+      `AFK: re-approving after a mechanical merge of ${cfg.defaultBranch} (${m.oldHead.slice(0, 8)} -> ${m.newHead.slice(0, 8)}). The merge changed none of this PR's own files (merge=union files aside), so the approved change is unchanged.`));
+    log(`PR #${pr}: approval dismissed by the push -> carried forward`);
+  } catch (e) { log(`PR #${pr}: could not carry the approval forward (${(e as Error).message.split("\n")[0]}); it will be reviewed again`); }
+}
+
 function escalate(pr: number, reason: string) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
   forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
@@ -485,6 +498,7 @@ async function main(): Promise<void> {
             });
           } else if (cls === "conflicted") {
             log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
+            let merged: { oldHead: string; newHead: string } | null = null;
             const outcome = await handleConflict(pr.number, {
               maxFailures: MAX_HEAL,
               alreadyContainsBase: () => branchContains(ROOT, branch, baseTip(ROOT, cfg.defaultBranch)),
@@ -493,6 +507,7 @@ async function main(): Promise<void> {
               markResolved: () => forge.prConflictRetryClear(pr.number),
               mechanical: () => mechanicalMerge({
                 repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
+                onMerged: (oldHead, newHead) => { merged = { oldHead, newHead }; },
               }),
               agent: async () => {
                 const sha = baseTip(ROOT, cfg.defaultBranch);
@@ -516,7 +531,21 @@ async function main(): Promise<void> {
             }
             // A new head needs a fresh review — except, if the consumer opts out, one that only
             // merged the base branch in mechanically. A failed agent resolve is retried next cycle.
-            const rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
+            let rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
+            // A mechanical merge that touched none of the PR's own files (merge=union files aside) left
+            // the reviewed change as it was: keep the review instead of a full re-review. Any doubt
+            // (the overlap can't be computed) re-reviews.
+            const m = merged as { oldHead: string; newHead: string } | null;
+            if (rereview && outcome === "mechanical" && m) {
+              let overlap: string[] | null = null;
+              try { overlap = baseMergeOverlap({ repo: ROOT, base: cfg.defaultBranch, oldHead: m.oldHead, newHead: m.newHead }); }
+              catch (e) { log(`PR #${pr.number}: could not compare the base merge with the PR's files (${(e as Error).message.split("\n")[0]}) -> re-reviewing`); }
+              if (overlap && !overlap.length) {
+                rereview = false;
+                log(`PR #${pr.number}: the base merge touched none of this PR's own files (merge=union files aside) -> keeping its review`);
+                keepApproval(pr.number, pr.reviewState, m);
+              } else if (overlap) log(`PR #${pr.number}: the base merge also changed this PR's ${overlap.slice(0, 3).join(", ")}${overlap.length > 3 ? ", …" : ""} -> re-reviewing`);
+            }
             if (rereview) {
               syncBranch(branch);
               if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);

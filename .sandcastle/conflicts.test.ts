@@ -17,7 +17,7 @@ if (!existsSync(join(ROOT, "afk.config.json")))
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
-const { mechanicalMerge, handleConflict, baseTip, branchContains } = await import("./conflicts.js");
+const { mechanicalMerge, handleConflict, baseTip, branchContains, baseMergeOverlap } = await import("./conflicts.js");
 type Deps = Parameters<typeof handleConflict>[1];
 
 const ID = { name: "dev-bot", email: "dev@bot.example" };
@@ -223,5 +223,72 @@ test("stale flag with real git: a branch that already merged main is detected vi
     }));
     assert.equal(out, "stale-flag");
     assert.equal(mech, 0);
+  } finally { fx.cleanup(); }
+});
+
+// --- does a mechanical base merge need a re-review? ------------------------------------------
+
+// The PR adds a CHANGELOG entry and edits app.txt; main then adds its own CHANGELOG entry (the
+// forge calls that a conflict — it ignores merge=union) and changes `mainFile`.
+const PAD = "\na\nb\nc\nd\ne\n";
+function baseMerge(mainFile: string, mainContent: string, attrs = "CHANGELOG.md merge=union\n") {
+  const fx = fixture({ attrs });
+  writeFileSync(join(fx.seed, "lib.txt"), "lib = 1\n");
+  writeFileSync(join(fx.seed, "app.txt"), `value = 1\n${PAD}`);
+  git(fx.seed, "add -A"); git(fx.seed, "commit -q -m lib"); git(fx.seed, "push -q origin HEAD:main");
+  git(fx.seed, "checkout -q -b agent/issue-1");
+  writeFileSync(join(fx.seed, "CHANGELOG.md"), "# Changelog\n- pr entry\n");
+  writeFileSync(join(fx.seed, "app.txt"), `value = 2\n${PAD}`);
+  git(fx.seed, "commit -qam pr"); git(fx.seed, "push -q origin agent/issue-1");
+  git(fx.seed, "checkout -q main");
+  writeFileSync(join(fx.seed, "CHANGELOG.md"), "# Changelog\n- main entry\n");
+  writeFileSync(join(fx.seed, mainFile), mainContent);
+  git(fx.seed, "add -A"); git(fx.seed, "commit -q -m main"); git(fx.seed, "push -q origin main");
+  let heads: { oldHead: string; newHead: string } | null = null;
+  const r = mechanicalMerge({ repo: fx.host, branch: "agent/issue-1", base: "main", identity: ID, onMerged: (oldHead, newHead) => { heads = { oldHead, newHead }; } });
+  return { fx, r, heads: heads as { oldHead: string; newHead: string } | null };
+}
+
+test("base merge: only a merge=union CHANGELOG and files the PR didn't touch -> no overlap (keep the review)", () => {
+  const { fx, r, heads } = baseMerge("lib.txt", "lib = 2\n");
+  try {
+    assert.equal(r, "merged");
+    assert.ok(heads && heads.oldHead !== heads.newHead);
+    assert.deepEqual(baseMergeOverlap({ repo: fx.host, base: "main", ...heads! }), []);
+  } finally { fx.cleanup(); }
+});
+
+test("base merge: main also changed a file the PR changed (merged cleanly) -> overlap (re-review)", () => {
+  // app.txt: the PR changed line 1; main appends a line, so git merges it cleanly — but the PR's own
+  // file now differs from what was reviewed.
+  const { fx, r, heads } = baseMerge("app.txt", `value = 1\n${PAD}other = 3\n`);
+  try {
+    assert.equal(r, "merged");
+    assert.deepEqual(baseMergeOverlap({ repo: fx.host, base: "main", ...heads! }), ["app.txt"]);
+  } finally { fx.cleanup(); }
+});
+
+test("base merge: a CHANGELOG overlap counts when it is NOT merge=union", () => {
+  // Without the union driver the two top entries conflict, so make main's entry non-adjacent.
+  const fx = fixture({});
+  try {
+    writeFileSync(join(fx.seed, "CHANGELOG.md"), "# Changelog\n\na\nb\nc\nd\ne\n");
+    git(fx.seed, "commit -qam pad"); git(fx.seed, "push -q origin HEAD:main");
+    git(fx.seed, "checkout -q -b agent/issue-1");
+    writeFileSync(join(fx.seed, "CHANGELOG.md"), "# Changelog\n- pr\n\na\nb\nc\nd\ne\n");
+    git(fx.seed, "commit -qam pr"); git(fx.seed, "push -q origin agent/issue-1");
+    git(fx.seed, "checkout -q main");
+    writeFileSync(join(fx.seed, "CHANGELOG.md"), "# Changelog\n\na\nb\nc\nd\ne\n- main\n");
+    git(fx.seed, "commit -qam main"); git(fx.seed, "push -q origin main");
+    let heads: { oldHead: string; newHead: string } | null = null;
+    assert.equal(mechanicalMerge({ repo: fx.host, branch: "agent/issue-1", base: "main", identity: ID, onMerged: (oldHead, newHead) => { heads = { oldHead, newHead }; } }), "merged");
+    assert.deepEqual(baseMergeOverlap({ repo: fx.host, base: "main", ...(heads as unknown as { oldHead: string; newHead: string }) }), ["CHANGELOG.md"]);
+  } finally { fx.cleanup(); }
+});
+
+test("baseMergeOverlap throws on an unknown commit (the loop then re-reviews)", () => {
+  const fx = fixture({});
+  try {
+    assert.throws(() => baseMergeOverlap({ repo: fx.host, base: "main", oldHead: "deadbeef", newHead: "deadbeef" }));
   } finally { fx.cleanup(); }
 });
