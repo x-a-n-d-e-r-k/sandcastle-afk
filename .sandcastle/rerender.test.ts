@@ -172,7 +172,7 @@ test("persistedRenderInputs lists pr-<n>/render-inputs/ and renderedHeads ignore
 
 test("uiGate reports kind 'missing' for stale screenshots and kind 'error' when the diff can't resolve", () => {
   const UI = { verifyGlobs: ["apps/web/**"], renderCmd: "x", artifactDir: "y" };
-  const g = uiGate(1, "agent/issue-1", UI, { changed: () => ["apps/web/A.tsx"], headSha: () => NEW, artifacts: () => [] });
+  const g = uiGate(1, "agent/issue-1", UI, { changed: () => ["apps/web/A.tsx"], headSha: () => NEW, artifacts: () => [], renderedHeads: () => [] });
   assert.equal(g.required && g.blocked ? g.kind : "", "missing");
   const e = uiGate(1, "agent/issue-1", UI, { changed: () => { throw new Error("no ref"); } });
   assert.equal(e.required && e.blocked ? e.kind : "", "error");

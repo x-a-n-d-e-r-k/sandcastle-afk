@@ -17,7 +17,7 @@ if (!existsSync(join(ROOT, "afk.config.json"))) {
 
 const {
   globToRegExp, matchesAnyGlob, uiFilesTouched, changedFiles, artifactsFor,
-  uiGate, implementUiBlock, reviewUiBlock, artifactBranch, DEFAULT_ARTIFACT_BRANCH,
+  uiGate, implementUiBlock, reviewUiBlock, artifactBranch, DEFAULT_ARTIFACT_BRANCH, uiChangedBetween,
 } = await import("./ui.js");
 
 const UI: UiCfg = {
@@ -191,12 +191,16 @@ const gate = (opts: {
   changed: string[];
   head?: string;
   artifacts: string[] | ((pr: number, sha: string) => string[]);
+  rendered?: string[];
+  uiChanged?: (a: string, b: string) => string[];
 }) =>
   uiGate(42, "agent/issue-1", opts.ui, {
     changed: () => opts.changed,
     headSha: () => opts.head ?? "head000",
     artifacts: (pr, sha) =>
       typeof opts.artifacts === "function" ? opts.artifacts(pr, sha) : opts.artifacts,
+    renderedHeads: () => opts.rendered ?? [],
+    uiChanged: opts.uiChanged ?? (() => { throw new Error("uiChanged not expected"); }),
   });
 
 test("gate: not required when the consumer has no ui config", () => {
@@ -233,6 +237,7 @@ test("gate: BLOCKS when artifacts exist only for an earlier head — stale after
   const g = gate({
     ui: UI, changed: ["apps/web/App.tsx"], head: "def456",
     artifacts: (_pr, sha) => store[sha] ?? [],
+    rendered: ["abc123"], uiChanged: () => ["apps/web/App.tsx"], // the heal rewrote the UI
   });
   assert.equal(g.required, true);
   assert.equal(g.required && g.blocked, true);
@@ -253,6 +258,61 @@ test("gate: FAILS CLOSED when the diff can't be computed — never throws", () =
   assert.equal(g!.required, true);
   assert.equal(g!.required && g!.blocked, true);
   assert.match(g!.required && g!.blocked ? g!.reason : "", /failing closed/i);
+});
+
+// --- carrying an earlier render forward ------------------------------------------------------
+
+test("gate: CARRIES screenshots from an earlier commit when no UI file changed since (a base merge)", () => {
+  // The bug: S was rendered, then a merge from main (packages/ only) moved the head to H. Keyed to
+  // the exact head, the gate blocked, the reviewer requested changes, the heal re-rendered, main
+  // moved again… until the heal cap parked a finished PR.
+  const store: Record<string, string[]> = { S0105db4: ["pr-42/S0105db4/desktop.png"] };
+  const seen: [string, string][] = [];
+  const g = gate({
+    ui: UI, changed: ["apps/web/App.tsx"], head: "H3da512b",
+    artifacts: (_pr, sha) => store[sha] ?? [],
+    rendered: ["S0105db4"], uiChanged: (a, b) => { seen.push([a, b]); return []; },
+  });
+  assert.equal(g.required && g.blocked, false);
+  assert.equal("carriedFrom" in g ? g.carriedFrom : "", "S0105db4");
+  assert.deepEqual(g.required && g.artifacts, ["pr-42/S0105db4/desktop.png"]);
+  assert.deepEqual(seen, [["S0105db4", "H3da512b"]]);
+});
+
+test("gate: no carry when a UI file changed since the render, or that commit is gone", () => {
+  const store: Record<string, string[]> = { S1: ["pr-42/S1/a.png"], S2: ["pr-42/S2/a.png"] };
+  const g = gate({
+    ui: UI, changed: ["apps/web/App.tsx"], head: "H",
+    artifacts: (_pr, sha) => store[sha] ?? [],
+    rendered: ["S1", "S2"],
+    uiChanged: (a) => { if (a === "S1") return ["apps/web/App.tsx"]; throw new Error("bad object S2"); },
+  });
+  assert.equal(g.required && g.blocked, true);
+  assert.equal(g.required && g.blocked ? g.kind : "", "missing"); // the host re-render (#67) still applies
+});
+
+test("gate: carries from whichever earlier render still matches, skipping a stale one", () => {
+  const store: Record<string, string[]> = { S1: ["pr-42/S1/a.png"], S2: ["pr-42/S2/a.png"] };
+  const g = gate({
+    ui: UI, changed: ["apps/web/App.tsx"], head: "H",
+    artifacts: (_pr, sha) => store[sha] ?? [],
+    rendered: ["S1", "S2"], uiChanged: (a) => (a === "S1" ? ["apps/web/x.css"] : []),
+  });
+  assert.equal("carriedFrom" in g ? g.carriedFrom : "", "S2");
+});
+
+test("uiChangedBetween: verifyGlobs matches plus canonDir; two-dot diff", () => {
+  const cmds: string[] = [];
+  const run = (c: string) => { cmds.push(c); return "packages/core/a.ts\napps/web/App.tsx\ndocs/design/screens/01.html\nREADME.md\n"; };
+  assert.deepEqual(uiChangedBetween("S", "H", UI, run), ["apps/web/App.tsx"]);
+  assert.deepEqual(uiChangedBetween("S", "H", { ...UI, canonDir: "docs/design/" }, run), ["apps/web/App.tsx", "docs/design/screens/01.html"]);
+  assert.deepEqual(cmds[0], "git diff --name-only S H");
+});
+
+test("reviewUiBlock tells the reviewer carried screenshots count", () => {
+  const out = reviewUiBlock({ required: true, blocked: false, files: ["apps/web/App.tsx"], artifacts: ["pr-42/S0105db4ab/a.png"], carriedFrom: "S0105db4ab" }, UI);
+  assert.match(out, /rendered at `S0105db4`/);
+  assert.match(out, /Do NOT block for want of screenshots of the exact head SHA/);
 });
 
 // --- injected prompt blocks -------------------------------------------------
