@@ -12,9 +12,10 @@ import { handleConflict, mechanicalMerge, baseTip, branchContains, type Conflict
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
 import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, closedIssuePrAction, type IssueCloseDeps } from "./merge-guard.js";
-import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
+import { isUsageError, dispatchIssue, checkpointAfterFailure, checkpointReason, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
 import { afterImplement, issueFingerprint, DEFAULT_MAX_NO_PR_RUNS } from "./no-pr.js";
+import { reviewForVerdict, DEFAULT_MAX_REVIEW_NO_VERDICT } from "./review-verdict.js";
 
 // House rules are re-read for EVERY run (a cheap local read), so `pnpm afk:rules` / editing
 // house-rules.md takes effect on the next dispatch without restarting running loops (#86).
@@ -208,6 +209,23 @@ const reviewGate = (pr: number) => {
 // What a (re-)review must account for: the latest blocking review and any rebuttal of it.
 const priorFor = (pr: number): string => { const g = reviewGate(pr); return g ? priorFindingsBlock(g.blockingBody, g.rebuttal) : ""; };
 
+// Every in-loop review goes through here: one that ends WITHOUT a verdict is counted, logged and, at
+// the cap, parked — never silently re-dispatched (review-verdict.ts). The branch is already synced.
+const reviewPr = (pr: number, branch: string, issue: string, prior: string) =>
+  reviewForVerdict(pr, {
+    max: cfg.maxReviewNoVerdict ?? DEFAULT_MAX_REVIEW_NO_VERDICT,
+    head: () => headShaOf(branch),
+    review: () => runGuarded(reviewOpts(pr, branch, issue, prior)),
+    isNoVerdictError: (e) => checkpointReason(e) === "idle timeout",
+    feedback: () => forge.prFeedback(pr),
+    mark: (m) => forge.prComment(pr, "--body", JSON.stringify(m)),
+    escalate: (n, head) => {
+      log(`PR #${pr}: ${n} reviews of ${head.slice(0, 8)} ended without a verdict -> escalating to ${L.needsHuman}`);
+      escalate(pr, `${n} review runs of head ${head.slice(0, 8)} ended without a verdict: the reviewer stopped before posting approve / request-changes (often a preflight it left running in the background). Removing \`${L.needsHuman}\` allows one more review; a new commit starts a fresh count`);
+    },
+    log,
+  });
+
 // The issue's maintainer discussion as the no-PR fingerprint sees it (#86): WITHOUT the loop's own
 // account, which posts the no-PR markers and (through the agent) the blocker comments — otherwise each
 // mark would change the fingerprint and reset the count forever. Only a SUCCESSFUL lookup is cached;
@@ -237,7 +255,7 @@ const healDeps = (pr: number, branch: string, issue: string, finding: () => stri
     forge.prClearChanges(pr);
     syncBranch(branch);
     if (EXTERNAL) log(`healed #${pr}; awaiting external re-review.`);
-    else { log(`re-reviewing #${pr}`); await runGuarded(reviewOpts(pr, branch, issue, priorFor(pr))); }
+    else { log(`re-reviewing #${pr}`); await reviewPr(pr, branch, issue, priorFor(pr)); }
   };
   return {
     maxHeal: MAX_HEAL,
@@ -502,7 +520,7 @@ async function main(): Promise<void> {
             if (rereview) {
               syncBranch(branch);
               if (EXTERNAL) log(`resolved conflicts on #${pr.number}; awaiting external review.`);
-              else { log(`re-reviewing #${pr.number} after conflict resolve`); await runGuarded(reviewOpts(pr.number, branch, issue, priorFor(pr.number))); }
+              else { log(`re-reviewing #${pr.number} after conflict resolve`); await reviewPr(pr.number, branch, issue, priorFor(pr.number)); }
             }
           } else if (pr.reviewState === "APPROVED") {
             if (EXTERNAL) { log(`PR #${pr.number} APPROVED — awaiting external merge.`); await sleepUnlessStopped(POLL_MS, stopNow); }
@@ -618,14 +636,14 @@ async function main(): Promise<void> {
               forge.prClearChanges(pr.number);
               syncBranch(branch);
               if (EXTERNAL) { log(`#${pr.number} awaiting external re-review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
-              else await runGuarded(reviewOpts(pr.number, branch, issue, priorFindingsBlock(gate!.blockingBody, gate!.rebuttal)));
+              else await reviewPr(pr.number, branch, issue, priorFindingsBlock(gate!.blockingBody, gate!.rebuttal));
             } else {
               await healUntilPushed(pr.number, "CHANGES_REQUESTED",
                 healDeps(pr.number, branch, issue, () => gate?.blockingBody ?? reviewGate(pr.number)?.blockingBody ?? ""));
             }
           } else {
             if (EXTERNAL) { log(`PR #${pr.number} awaiting external review.`); await sleepUnlessStopped(POLL_MS, stopNow); }
-            else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await runGuarded(reviewOpts(pr.number, branch, issue, priorFor(pr.number))); }
+            else { log(`PR #${pr.number} needs review -> reviewing`); syncBranch(branch); await reviewPr(pr.number, branch, issue, priorFor(pr.number)); }
           }
           break prs; // this PR was this cycle's work
         }
