@@ -134,6 +134,12 @@ export type Cfg = {
    * maintainer comment resets the count.
    */
   maxNoPrRuns?: number;
+  /**
+   * Review runs that may end WITHOUT a verdict (no completion signal) on the same PR head before the PR
+   * is parked with needsHuman. Optional; default 3. A new head starts a fresh count; un-parking the PR
+   * allows one more review.
+   */
+  maxReviewNoVerdict?: number;
 };
 
 export const cfg: Cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
@@ -354,9 +360,18 @@ export const loadAgentRules = (): string => {
 // One command per line under `set -e`, never joined with ` && `: `a && x || true && b` keeps
 // going after `a` fails. Fails closed on an empty list — an empty block a reviewer could
 // report as "preflight passed" is worse than no run at all.
+// Runs are headless with one iteration: when the agent ends its turn, the session ENDS. An agent that
+// backgrounds a slow preflight and stops "to wait for the notification" never gets one, and its run ends
+// with no result (a review with no verdict was silently re-dispatched from scratch).
+export const PREFLIGHT_IN_TURN =
+  "Preflight must FINISH within this turn. Run it in the foreground (it may take many minutes — that is " +
+  "fine). If you background it, poll in a blocking loop until it has written its exit code. Never end your " +
+  "turn to wait for a background task or a notification: this session is headless and ends the moment you " +
+  "stop, so nothing will wake you, and the run's result is lost.";
+
 export const renderPreflight = (cmds: string[]): string => {
   if (!cmds?.length) throw new Error("preflight must list at least one command");
-  return ["```bash", "set -e", ...cmds, "```"].join("\n");
+  return ["```bash", "set -e", ...cmds, "```", "", PREFLIGHT_IN_TURN].join("\n");
 };
 
 // `working` is included so a claimed issue (`working` or any `working:<id>` sub-label) is

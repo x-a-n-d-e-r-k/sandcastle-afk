@@ -56,6 +56,8 @@ async function main(): Promise<void> {
   const r = await run(cliReviewOpts(Number(PR), branch, issue, prior));
 
   log(`Review run done for PR #${PR} (issue #${issue}): branch ${r.branch}`);
+  if (r.completionSignal === undefined)
+    console.warn(`Warning: the review of PR #${PR} ended WITHOUT a verdict (no completion signal) — check the PR for an approve / request-changes before trusting it.`);
 }
 
 // Only review when run as the entry point — importing (the test suite) must not.

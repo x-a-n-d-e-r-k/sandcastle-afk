@@ -13,7 +13,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CFG = join(ROOT, "afk.config.json");
 if (!existsSync(CFG)) copyFileSync(join(ROOT, "afk.config.example.json"), CFG);
 
-const { renderPreflight, cfg } = await import("./config.js");
+const { renderPreflight, cfg, PREFLIGHT_IN_TURN } = await import("./config.js");
 const { implementOpts, reviewOpts, healOpts, resolveConflictsOpts, triageOpts } = await import("./loop.js");
 const { mainImplementOpts } = await import("./main.js");
 const { cliReviewOpts } = await import("./review.js");
@@ -21,7 +21,7 @@ const { cliReviewOpts } = await import("./review.js");
 // --- renderPreflight --------------------------------------------------------------------------
 
 test("renderPreflight: single command → fenced bash block with set -e", () => {
-  assert.equal(renderPreflight(["npm run preflight"]), "```bash\nset -e\nnpm run preflight\n```");
+  assert.equal(renderPreflight(["npm run preflight"]), "```bash\nset -e\nnpm run preflight\n```\n\n" + PREFLIGHT_IN_TURN);
 });
 
 test("renderPreflight: several commands on separate lines, never joined with &&", () => {

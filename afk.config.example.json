@@ -38,6 +38,7 @@
   "maxPipelineRetry": 2,
   "maxResume": 2,
   "maxNoPrRuns": 2,
+  "maxReviewNoVerdict": 3,
   "flakyJobs": [],
   "priorityLabels": ["highest", "high", "low", "lowest"],
   "agentRules": [],
