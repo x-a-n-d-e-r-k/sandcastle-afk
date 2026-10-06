@@ -498,7 +498,7 @@ async function main(): Promise<void> {
             });
           } else if (cls === "conflicted") {
             log(`PR #${pr.number} conflicts with ${cfg.defaultBranch}`);
-            let merged: { oldHead: string; newHead: string } | null = null;
+            const merged: { heads?: { oldHead: string; newHead: string } } = {};
             const outcome = await handleConflict(pr.number, {
               maxFailures: MAX_HEAL,
               alreadyContainsBase: () => branchContains(ROOT, branch, baseTip(ROOT, cfg.defaultBranch)),
@@ -507,7 +507,7 @@ async function main(): Promise<void> {
               markResolved: () => forge.prConflictRetryClear(pr.number),
               mechanical: () => mechanicalMerge({
                 repo: ROOT, branch, base: cfg.defaultBranch, identity: requireGitIdentity(cfg.gitIdentity),
-                onMerged: (oldHead, newHead) => { merged = { oldHead, newHead }; },
+                onMerged: (oldHead, newHead) => { merged.heads = { oldHead, newHead }; },
               }),
               agent: async () => {
                 const sha = baseTip(ROOT, cfg.defaultBranch);
@@ -534,17 +534,18 @@ async function main(): Promise<void> {
             let rereview = outcome === "agent-resolved" || (outcome === "mechanical" && cfg.rereviewAfterMechanicalMerge !== false);
             // A mechanical merge that touched none of the PR's own files (merge=union files aside) left
             // the reviewed change as it was: keep the review instead of a full re-review. Any doubt
-            // (the overlap can't be computed) re-reviews.
-            const m = merged as { oldHead: string; newHead: string } | null;
-            if (rereview && outcome === "mechanical" && m) {
+            // (the overlap can't be computed) re-reviews. Computed with rereviewAfterMechanicalMerge
+            // false too: keeping the review then also means carrying an approval the push dismissed.
+            const m = merged.heads;
+            if (outcome === "mechanical" && m) {
               let overlap: string[] | null = null;
               try { overlap = baseMergeOverlap({ repo: ROOT, base: cfg.defaultBranch, oldHead: m.oldHead, newHead: m.newHead }); }
-              catch (e) { log(`PR #${pr.number}: could not compare the base merge with the PR's files (${(e as Error).message.split("\n")[0]}) -> re-reviewing`); }
+              catch (e) { log(`PR #${pr.number}: could not compare the base merge with the PR's files (${(e as Error).message.split("\n")[0]})${rereview ? " -> re-reviewing" : ""}`); }
               if (overlap && !overlap.length) {
+                if (rereview) log(`PR #${pr.number}: the base merge touched none of this PR's own files (merge=union files aside) -> keeping its review`);
                 rereview = false;
-                log(`PR #${pr.number}: the base merge touched none of this PR's own files (merge=union files aside) -> keeping its review`);
                 keepApproval(pr.number, pr.reviewState, m);
-              } else if (overlap) log(`PR #${pr.number}: the base merge also changed this PR's ${overlap.slice(0, 3).join(", ")}${overlap.length > 3 ? ", …" : ""} -> re-reviewing`);
+              } else if (overlap && rereview) log(`PR #${pr.number}: the base merge also changed this PR's ${overlap.slice(0, 3).join(", ")}${overlap.length > 3 ? ", …" : ""} -> re-reviewing`);
             }
             if (rereview) {
               syncBranch(branch);
