@@ -71,7 +71,7 @@ pnpm afk:update --from ../sandcastle-afk   # sync from a local checkout instead 
 
 **Config contract.** Before installing, `afk:update` runs the incoming layer's own required-key validators (`.sandcastle/config-contract.ts`, the same list the loop enforces at startup) against your `afk.config.json`. `--dry-run` lists any missing or invalid key under "config changes required", with the validator's message and the example value. A real update still installs the files, but ends with a "CONFIG ACTION REQUIRED" block and exits non-zero (`--force` exits 0), because the loop won't start until you fix it. If the check itself can't run, update treats that as a failure too. Two caveats:
 - The update that *first* brings in this check runs your old `update.ts`, so it can't check anything. The loop's own startup check catches a missing key instead.
-- Because `afk.config.example.json` is now managed, any edits to your copy are overwritten. They show up in `git diff`, so review it.
+- Because `afk.config.example.json` is now managed, any edits to your copy are overwritten. They show up in `git diff`, so review it. A copy that differs only in formatting (e.g. your formatter reflowed it) is left alone. To keep a formatter gate from touching it at all, add it to your formatter's ignore file.
 
 **Source.** By default it syncs from `https://github.com/x-a-n-d-e-r-k/sandcastle-afk`. Pin a different source with the `layerRepo` field in `afk.config.json`, or override per-run with `--from <git-url|path>`. URLs are shallow-cloned to a temp dir; the synced layer SHA is recorded in `.sandcastle/.layer-sync.json` (gitignored local state).
 

@@ -99,11 +99,20 @@ try {
     return tryf(() => readFileSync(a).equals(readFileSync(b)), false);
   };
 
+  // A managed root JSON file (the example config) that differs only in FORMATTING is left alone. A
+  // consumer whose preflight runs a formatter (`prettier --check .`) gets it reformatted by an agent to
+  // keep the gate green; overwriting it with the layer's bytes on every update just undid that, so the
+  // tree was dirty after each update and the reformat came back in the next PR — forever.
+  const sameJson = (a: string, b: string) =>
+    tryf(() => JSON.stringify(JSON.parse(readFileSync(a, "utf8"))) === JSON.stringify(JSON.parse(readFileSync(b, "utf8"))), false);
+
   const changed: string[] = [];
   for (const rel of tracked) {
     const src = join(layerDir, rel);
     const dst = join(ROOT, rel);
-    if (!sameFile(src, dst)) changed.push(rel);
+    if (sameFile(src, dst)) continue;
+    if (MANAGED_FILES.has(rel) && rel.endsWith(".json") && existsSync(dst) && sameJson(src, dst)) continue;
+    changed.push(rel);
   }
 
   // ---- 4. resolve base version delta ---------------------------------------
