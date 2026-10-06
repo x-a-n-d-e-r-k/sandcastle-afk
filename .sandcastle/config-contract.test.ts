@@ -101,6 +101,21 @@ test("afk:update (apply) with a missing key: files installed, example synced, lo
   } finally { c.cleanup(); }
 });
 
+test("afk:update leaves a formatting-only difference in the example config alone (a consumer's formatter)", { skip: loopRunning() && "a loop.ts process is running on this host (update refuses without --force)" }, () => {
+  const c = consumer(EXAMPLE);
+  try {
+    // What `prettier --write` (or any formatter) leaves: same JSON, different bytes.
+    const reformatted = JSON.stringify(JSON.parse(readFileSync(join(ROOT, "afk.config.example.json"), "utf8"))) + "\n";
+    writeFileSync(join(c.dir, "afk.config.example.json"), reformatted);
+    execSync("git -c user.name=t -c user.email=t@t commit -qam fmt", { cwd: c.dir, stdio: "ignore", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } });
+    const dry = update(c.dir, "--dry-run");
+    assert.doesNotMatch(dry.stdout, /afk\.config\.example\.json/, "not listed as changed");
+    const r = update(c.dir);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(readFileSync(join(c.dir, "afk.config.example.json"), "utf8"), reformatted, "the consumer's formatting is kept");
+  } finally { c.cleanup(); }
+});
+
 test("afk:update (apply) --force with a missing key: same block, exit 0", () => {
   const c = consumer(without("gitIdentity"));
   try {
