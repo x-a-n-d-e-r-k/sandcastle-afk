@@ -74,3 +74,21 @@ test("a verdict clears this process's tally for that head", async () => {
   assert.equal(await reviewForVerdict(13, p.deps), "no-verdict");
   assert.ok(p.logs.at(-1)!.includes("(1/3)"));
 });
+
+test("an idle-timeout review (it sat waiting instead of ending its turn) counts and still throws; infra errors don't count", async () => {
+  const p = fakePr({ head: "1d1e0005abcd", signals: [] });
+  const idle = Object.assign(new Error("Agent idle for 600s"), { name: "(FiberFailure) AgentIdleTimeoutError" });
+  const deps = (err: Error): ReviewVerdictDeps => ({
+    ...p.deps,
+    review: async () => { throw err; },
+    isNoVerdictError: (e) => /AgentIdleTimeoutError/.test((e as Error).name),
+  });
+  await assert.rejects(reviewForVerdict(14, deps(idle)), /Agent idle/);
+  assert.equal(countNoVerdict(p.comments(), "1d1e0005abcd"), 1);
+  assert.match(p.logs.at(-1)!, /\(1\/3\).*Agent idle for 600s/);
+  await assert.rejects(reviewForVerdict(14, deps(new Error("docker: daemon not running"))), /docker/);
+  assert.equal(countNoVerdict(p.comments(), "1d1e0005abcd"), 1); // not counted
+  await assert.rejects(reviewForVerdict(14, deps(idle)));
+  await assert.rejects(reviewForVerdict(14, deps(idle)));
+  assert.equal(p.escalations.length, 1); // the third idle timeout parks it
+});

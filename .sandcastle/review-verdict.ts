@@ -30,6 +30,12 @@ export type ReviewVerdictDeps = {
   /** The PR's comments, where the markers live. */
   feedback: () => string;
   mark: (marker: string) => void;
+  /**
+   * A run that THREW but is still the reviewer's own failure to finish — an idle timeout (it sat waiting
+   * on a background preflight instead of ending its turn). Counted like a no-verdict end, then rethrown.
+   * Infra failures (Docker, usage limits) are not: they'd park healthy PRs.
+   */
+  isNoVerdictError?: (e: unknown) => boolean;
   /** At the cap: park the PR for a human. */
   escalate: (count: number, head: string) => void;
   log: (m: string) => void;
@@ -44,15 +50,24 @@ const tally = new Map<string, number>();
 export async function reviewForVerdict(pr: number, d: ReviewVerdictDeps): Promise<ReviewVerdictOutcome> {
   const head = d.head();
   const key = `${pr}@${head}`;
-  const r = await d.review();
+  let r: { completionSignal?: string };
+  try { r = await d.review(); }
+  catch (e) {
+    if (d.isNoVerdictError?.(e)) recordNoVerdict(pr, head, key, d, ` (${(e as Error)?.message?.split("\n")[0] ?? "run error"})`);
+    throw e;
+  }
   if (r.completionSignal !== undefined) { tally.delete(key); return "verdict"; }
+  return recordNoVerdict(pr, head, key, d, "");
+}
+
+function recordNoVerdict(pr: number, head: string, key: string, d: ReviewVerdictDeps, why: string): ReviewVerdictOutcome {
   const local = (tally.get(key) ?? 0) + 1;
   tally.set(key, local);
   let forgeCount = 0;
   try { d.mark(noVerdictMarker(head)); forgeCount = countNoVerdict(d.feedback(), head); }
   catch (e) { d.log(`PR #${pr}: could not record the no-verdict review (${(e as Error).message.split("\n")[0]})`); }
   const n = Math.max(forgeCount, local);
-  d.log(`review of #${pr} ended without a verdict (${n}/${d.max}) — head ${head.slice(0, 8)}`);
+  d.log(`review of #${pr} ended without a verdict (${n}/${d.max}) — head ${head.slice(0, 8)}${why}`);
   if (n >= d.max) { tally.delete(key); d.escalate(n, head); return "escalated"; }
   return "no-verdict";
 }

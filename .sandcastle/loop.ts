@@ -12,7 +12,7 @@ import { handleConflict, mechanicalMerge, baseTip, branchContains, type Conflict
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
 import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
 import { closeLinkedIssue, guardedMerge, landedOnBase, assertGitSupportsMergeTree, sameCommitAsBlock, closedIssuePrAction, type IssueCloseDeps } from "./merge-guard.js";
-import { isUsageError, dispatchIssue, checkpointAfterFailure, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
+import { isUsageError, dispatchIssue, checkpointAfterFailure, checkpointReason, hasCheckpoint, countResumes, RESUME_MARKER, resumePrompt } from "./checkpoint.js";
 import { isEntryPoint } from "./entry.js";
 import { afterImplement, issueFingerprint, DEFAULT_MAX_NO_PR_RUNS } from "./no-pr.js";
 import { reviewForVerdict, DEFAULT_MAX_REVIEW_NO_VERDICT } from "./review-verdict.js";
@@ -216,6 +216,7 @@ const reviewPr = (pr: number, branch: string, issue: string, prior: string) =>
     max: cfg.maxReviewNoVerdict ?? DEFAULT_MAX_REVIEW_NO_VERDICT,
     head: () => headShaOf(branch),
     review: () => runGuarded(reviewOpts(pr, branch, issue, prior)),
+    isNoVerdictError: (e) => checkpointReason(e) === "idle timeout",
     feedback: () => forge.prFeedback(pr),
     mark: (m) => forge.prComment(pr, "--body", JSON.stringify(m)),
     escalate: (n, head) => {
