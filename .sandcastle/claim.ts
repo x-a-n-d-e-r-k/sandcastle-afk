@@ -83,6 +83,9 @@ const byPriority = (a: Issue, b: Issue): number => {
 //   - crash recovery: a pre-crash claim with no PR is resumed before any new pickup.
 export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue | undefined> {
   const { listReady, listClosed, view, addLabel, removeLabel, settle, loopId, mine, dry } = deps;
+  // The closed-PR list is a slow forge call: read it FIRST, so the ready list (and the claims on it)
+  // is as fresh as possible when the candidate is picked (#95).
+  const closed = listClosed();
   const issues = listReady();
   const openHeads = new Set(allPRs.map((p) => p.headRef));
   // A CLOSED agent PR means its issue is resolved — merged (work shipped) or
@@ -93,7 +96,7 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
   // the orphan label and resolved nothing, so its issue stays dispatchable. Merged always counts.
   const isOrphan = (p: PR) => !p.merged && (p.labels ?? []).includes(ORPHAN_LABEL);
   const resolved = new Set(
-    listClosed()
+    closed
       .filter((p) => p.headRef.startsWith("agent/issue-") && !isOrphan(p))
       .map((p) => p.headRef),
   );
@@ -126,14 +129,29 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
     if (resume) { log(`resuming own claim #${resume.number}`); return resume; }
   }
 
-  const candidate = issues
+  const candidates = issues
     .filter((i) => !isExcluded(i.labels))
     .filter((i) => !hasOpenWork(i.number))
-    .sort(byPriority)[0];
+    .sort(byPriority);
 
   // DRY-run safety: the claim is a live write, so short-circuit BEFORE it. (A dry run
   // once silently labelled a real issue — the claim must never fire under DRY.)
-  if (!candidate || !mine || dry) return candidate;
+  if (!candidates.length || !mine || dry) return candidates[0];
+
+  // Never claim over an existing claim (#95). The lowest-id tiebreak below is only sound while both
+  // loops are inside their settle window at once; a loop whose list was read before another loop's
+  // claim landed would otherwise write its label AFTER that loop had verified and started, "win" a
+  // race that was already over, and both would work the issue. Re-read right before the write, so
+  // the remaining window is the claim itself — which the settle + tiebreak does cover.
+  // A candidate taken meanwhile is skipped for the next one, so a lost pick doesn't idle a poll.
+  let candidate: Issue | undefined;
+  for (const c of candidates) {
+    const current = view(c.number).labels ?? [];
+    if (!isExcluded(current)) { candidate = c; break; }
+    const by = current.filter((l) => l === WORKING || l.startsWith(`${WORKING}:`));
+    log(`#${c.number}: ${by.length ? `already claimed (${by.join(", ")})` : "no longer pickable"} — not claiming`);
+  }
+  if (!candidate) return undefined;
 
   // Claim with verify-after-write: add our label, let it settle, re-read the issue.
   addLabel(candidate.number, mine);
