@@ -56,10 +56,12 @@ test("claimWinner: lowest LOOP_ID among working:* wins; none => undefined", () =
 
 test("tiebreak: contested claim — `a` wins, `b`'s loop releases and retries", async () => {
   const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
-  // From b's view: after writing working:b, the re-read shows both claims -> a wins.
+  // From b's view: unclaimed right before the write; after writing working:b, the re-read shows
+  // both claims (a claimed within b's settle window) -> a wins.
+  let views = 0;
   const d = deps({
     listReady: () => [issue],
-    view: () => ({ ...issue, labels: ["agent-ready", "working:a", "working:b"] }),
+    view: () => (views++ === 0 ? issue : { ...issue, labels: ["agent-ready", "working:a", "working:b"] }),
     loopId: "b",
     mine: "working:b",
   });
@@ -70,13 +72,71 @@ test("tiebreak: contested claim — `a` wins, `b`'s loop releases and retries", 
 
 test("tiebreak: claim winner keeps the issue with a single write", async () => {
   const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
+  let views = 0;
   const d = deps({
     listReady: () => [issue],
-    view: () => ({ ...issue, labels: ["agent-ready", "working:a"] }),
+    view: () => (views++ === 0 ? issue : { ...issue, labels: ["agent-ready", "working:a"] }),
   });
   const picked = await pickNextIssue([], d);
   assert.equal(picked?.number, 7);
   assert.deepEqual(d.edits, ["add 7 working:a"]); // claimed, never released
+});
+
+test("#95: never claims over an existing claim — the list was stale, the re-read before the write shows working:b", async () => {
+  // a's ready list was read before b's claim landed; b has since verified and started. a must not
+  // write working:a (it would "win" the lowest-id tiebreak of a race that was already over).
+  const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
+  const d = deps({
+    listReady: () => [issue],
+    view: () => ({ ...issue, labels: ["agent-ready", "working:b"] }),
+  });
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, []); // addLabel never called
+});
+
+test("#95: a candidate claimed meanwhile is skipped for the next one (no idle poll)", async () => {
+  const taken: Issue = { number: 7, title: "a", labels: ["agent-ready"] };
+  const free: Issue = { number: 8, title: "b", labels: ["agent-ready"] };
+  const seen: number[] = [];
+  let freeViews = 0;
+  const d = deps({
+    listReady: () => [taken, free],
+    view: (n) => {
+      seen.push(n);
+      if (n === 7) return { ...taken, labels: ["agent-ready", "working:b"] };
+      return freeViews++ === 0 ? free : { ...free, labels: ["agent-ready", "working:a"] };
+    },
+  });
+  assert.equal((await pickNextIssue([], d))?.number, 8);
+  assert.deepEqual(d.edits, ["add 8 working:a"]);
+  assert.deepEqual(seen, [7, 8, 8]); // re-read 7 (taken), re-read 8, verify 8
+});
+
+test("#95: an issue that stopped being pickable (e.g. parked) between list and claim is not claimed", async () => {
+  const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
+  const d = deps({ listReady: () => [issue], view: () => ({ ...issue, labels: ["agent-ready", "needs-human"] }) });
+  assert.equal(await pickNextIssue([], d), undefined);
+  assert.deepEqual(d.edits, []);
+});
+
+test("#95: an issue closed, or no longer agent-ready, between list and claim is not claimed", async () => {
+  const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
+  const closed = deps({ listReady: () => [issue], view: () => ({ ...issue, state: "CLOSED" }), readyLabel: "agent-ready" });
+  assert.equal(await pickNextIssue([], closed), undefined);
+  assert.deepEqual(closed.edits, []);
+  const unready = deps({ listReady: () => [issue], view: () => ({ ...issue, labels: [] }), readyLabel: "agent-ready" });
+  assert.equal(await pickNextIssue([], unready), undefined);
+  assert.deepEqual(unready.edits, []);
+});
+
+test("#95: the slow closed-PR list is read BEFORE the ready list", async () => {
+  const order: string[] = [];
+  const d = deps({
+    listClosed: () => { order.push("closed"); return []; },
+    listReady: () => { order.push("ready"); return []; },
+  });
+  await pickNextIssue([], d);
+  assert.deepEqual(order, ["closed", "ready"]);
 });
 
 test("resume-path: an issue carrying MINE with no PR is returned before any unclaimed candidate", async () => {
