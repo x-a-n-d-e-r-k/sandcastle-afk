@@ -119,6 +119,16 @@ test("#95: an issue that stopped being pickable (e.g. parked) between list and c
   assert.deepEqual(d.edits, []);
 });
 
+test("#95: an issue closed, or no longer agent-ready, between list and claim is not claimed", async () => {
+  const issue: Issue = { number: 7, title: "do thing", labels: ["agent-ready"] };
+  const closed = deps({ listReady: () => [issue], view: () => ({ ...issue, state: "CLOSED" }), readyLabel: "agent-ready" });
+  assert.equal(await pickNextIssue([], closed), undefined);
+  assert.deepEqual(closed.edits, []);
+  const unready = deps({ listReady: () => [issue], view: () => ({ ...issue, labels: [] }), readyLabel: "agent-ready" });
+  assert.equal(await pickNextIssue([], unready), undefined);
+  assert.deepEqual(unready.edits, []);
+});
+
 test("#95: the slow closed-PR list is read BEFORE the ready list", async () => {
   const order: string[] = [];
   const d = deps({

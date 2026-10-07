@@ -11,7 +11,7 @@
 import { cfg, log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
 import * as forge from "./forge-client.js";
 
-export type Issue = { number: number; title: string; labels: string[] };
+export type Issue = { number: number; title: string; labels: string[]; state?: string };
 export type PR = { headRef: string; labels?: string[]; merged?: boolean };
 
 // The claim label THIS clone writes. Empty when LOOP_ID is unset => single-loop mode:
@@ -53,6 +53,8 @@ export type PickDeps = {
   loopId: string;
   mine: string;
   dry: boolean;
+  /** The ready label: an issue that lost it between the list and the claim is not claimed (#95). */
+  readyLabel?: string;
 };
 
 // Live forge-backed deps. A factory (not a constant) so importing this module never
@@ -67,6 +69,7 @@ export const realPickDeps = (readyLabel: string, dry: boolean): PickDeps => ({
   loopId: LOOP_ID,
   mine: MINE,
   dry,
+  readyLabel,
 });
 
 // Priority sort (unchanged from the original loop): priority label, then `fix*` titles
@@ -82,7 +85,7 @@ const byPriority = (a: Issue, b: Issue): number => {
 //     the loser releases its own label and retries next cycle.
 //   - crash recovery: a pre-crash claim with no PR is resumed before any new pickup.
 export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue | undefined> {
-  const { listReady, listClosed, view, addLabel, removeLabel, settle, loopId, mine, dry } = deps;
+  const { listReady, listClosed, view, addLabel, removeLabel, settle, loopId, mine, dry, readyLabel } = deps;
   // The closed-PR list is a slow forge call: read it FIRST, so the ready list (and the claims on it)
   // is as fresh as possible when the candidate is picked (#95).
   const closed = listClosed();
@@ -146,10 +149,14 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
   // A candidate taken meanwhile is skipped for the next one, so a lost pick doesn't idle a poll.
   let candidate: Issue | undefined;
   for (const c of candidates) {
-    const current = view(c.number).labels ?? [];
-    if (!isExcluded(current)) { candidate = c; break; }
+    const now = view(c.number);
+    const current = now.labels ?? [];
+    const closed = (now.state ?? "").toLowerCase() === "closed";
+    const unready = !!readyLabel && !current.includes(readyLabel);
+    if (!isExcluded(current) && !closed && !unready) { candidate = c; break; }
     const by = current.filter((l) => l === WORKING || l.startsWith(`${WORKING}:`));
-    log(`#${c.number}: ${by.length ? `already claimed (${by.join(", ")})` : "no longer pickable"} — not claiming`);
+    const why = by.length ? `already claimed (${by.join(", ")})` : closed ? "closed" : unready ? `no longer ${readyLabel}` : "no longer pickable";
+    log(`#${c.number}: ${why} — not claiming`);
   }
   if (!candidate) return undefined;
 
