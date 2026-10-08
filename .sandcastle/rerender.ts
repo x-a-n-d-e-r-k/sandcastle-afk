@@ -92,7 +92,7 @@ export const renderCommand = (ui: UiCfg): string =>
 // drops it from the current diff, yet the PR's UI did change since the render.
 export const prUiFilesAt = (o: { repo: string; base: string; sha: string; globs: string[]; run?: Run }): string[] => {
   const run = o.run ?? sh;
-  const changed = run(`git diff --name-only origin/${o.base}...${o.sha}`, o.repo).split("\n").map((s) => s.trim()).filter(Boolean);
+  const changed = run(`git diff --name-only ${shq(`origin/${o.base}...${o.sha}`)}`, o.repo).split("\n").map((s) => s.trim()).filter(Boolean);
   return uiFilesTouched(changed, o.globs);
 };
 
@@ -135,11 +135,11 @@ export const publishArtifacts = (o: {
     const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
     run("git add -A", tmp);
     run(`git ${as} commit -q -m ${shq(`artifacts: pr-${o.pr} @ ${o.sha} (loop re-render)`)}`, tmp);
-    try { run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp); }
+    try { run(`git push -q origin ${shq(`HEAD:refs/heads/${o.artifactBranch}`)}`, tmp); }
     catch {
       // Another loop/agent published to the artifact branch at the same moment: rebase once, retry.
       run(`git ${as} pull -q --rebase origin ${shq(o.artifactBranch)}`, tmp); // rebase re-commits: needs the identity
-      run(`git push -q origin HEAD:refs/heads/${o.artifactBranch}`, tmp);
+      run(`git push -q origin ${shq(`HEAD:refs/heads/${o.artifactBranch}`)}`, tmp);
     }
     return files.length;
   } finally {
@@ -164,7 +164,7 @@ export const liveRenderAndPublish = async (o: {
       // Two steps, not a pipe: a failing `git archive` must not be masked by tar's exit status.
       const tarball = join(tmpdir(), `afk-render-inputs-${o.pr}-${process.pid}.tar`);
       try {
-        sh(`git archive --format=tar -o ${shq(tarball)} origin/${o.artifactBranch} ${shq(renderInputsPrefix(o.pr))}`, o.repo);
+        sh(`git archive --format=tar -o ${shq(tarball)} ${shq(`origin/${o.artifactBranch}`)} ${shq(renderInputsPrefix(o.pr))}`, o.repo);
         sh(`tar -xf ${shq(tarball)} --strip-components=2 -C ${shq(wt)}`, o.repo);
       } finally { rmSync(tarball, { force: true }); }
     }

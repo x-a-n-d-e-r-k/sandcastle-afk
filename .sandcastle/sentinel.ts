@@ -82,9 +82,9 @@ function fileIssue(f: Failure) {
 }
 
 log(`e2e sentinel: testing fresh origin/${cfg.defaultBranch} in an isolated worktree.`);
-sh(`git fetch origin ${cfg.defaultBranch}`);
-shSafe(`git worktree remove --force ${WT}`, ROOT);
-sh(`git worktree add --detach ${WT} origin/${cfg.defaultBranch}`);
+sh(`git fetch origin ${shq(cfg.defaultBranch)}`);
+shSafe(`git worktree remove --force ${shq(WT)}`, ROOT);
+sh(`git worktree add --detach ${shq(WT)} ${shq(`origin/${cfg.defaultBranch}`)}`);
 try {
   sh(cfg.install, `${ROOT}/${WT}`);
   const failures = runE2E();
@@ -102,6 +102,6 @@ try {
     log(`done: ${confirmed.length} confirmed, ${failures.length - confirmed.length} flake(s).`);
   }
 } finally {
-  shSafe(`git worktree remove --force ${WT}`, ROOT);
+  shSafe(`git worktree remove --force ${shq(WT)}`, ROOT);
   sh(`git worktree prune`);
 }

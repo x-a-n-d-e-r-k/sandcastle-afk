@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight, isSafeRef } from "./config.js";
+import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight, isSafeRef, shq } from "./config.js";
 import * as forge from "./forge-client.js";
 import { uiGate, reviewUiBlock } from "./ui.js";
 import { isEntryPoint } from "./entry.js";
@@ -48,8 +48,8 @@ async function main(): Promise<void> {
     console.warn(`Warning: PR #${PR} body has no closing keyword; derived issue #${issue} from branch '${branch}'. The issue will NOT auto-close on merge.`);
   if (!issue) console.warn("Warning: could not derive issue number from PR body or branch.");
 
-  sh(`git fetch origin ${branch}`);
-  sh(`git branch -f ${branch} origin/${branch}`);
+  sh(`git fetch origin ${shq(branch)}`);
+  sh(`git branch -f ${shq(branch)} ${shq(`origin/${branch}`)}`);
 
   // The re-review is not stateless (#81): show it the latest blocking review and any rebuttal.
   let prior = "";

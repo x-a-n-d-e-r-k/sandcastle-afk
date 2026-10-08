@@ -236,7 +236,7 @@ export const ensureHostOnDefaultBranch = () => {
   try {
     if (sh("git rev-parse --abbrev-ref HEAD") !== cfg.defaultBranch) {
       log(`host repo not on ${cfg.defaultBranch} — resetting (work is safe on the pushed branch/PR)`);
-      sh(`git checkout -f ${cfg.defaultBranch}`);
+      sh(`git checkout -f ${shq(cfg.defaultBranch)}`);
     }
   } catch (e) {
     log(`ensureHostOnDefaultBranch failed: ${(e as Error).message}`);

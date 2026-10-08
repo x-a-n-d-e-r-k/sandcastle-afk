@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, isAgentBranch, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, isAgentBranch, shq, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers, inFlightPrs } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -151,7 +151,7 @@ export const triageOpts = (): RunOptions => {
 
 // isAgentBranch, not a prefix match: the head ref is forge-supplied and reaches host `git` (#97).
 const getAgentPRs = (): PR[] => forge.prList().filter((p) => isAgentBranch(p.headRef));
-const syncBranch = (b: string) => { ensureHostOnDefaultBranch(); sh(`git fetch origin ${b}`); pruneWorktrees(); sh(`git branch -f ${b} origin/${b}`); };
+const syncBranch = (b: string) => { ensureHostOnDefaultBranch(); sh(`git fetch origin ${shq(b)}`); pruneWorktrees(); sh(`git branch -f ${shq(b)} ${shq(`origin/${b}`)}`); };
 
 // A leftover `agent/issue-N` branch (from a failed/incomplete dispatch) gets REUSED by
 // Sandcastle at its old tip instead of being recreated from fresh `main` — so every
@@ -159,8 +159,8 @@ const syncBranch = (b: string) => { ensureHostOnDefaultBranch(); sh(`git fetch o
 // Safe: we only dispatch issues with no open PR and no closed-unmerged PR (see pickNextIssue).
 function deleteStaleBranch(issue: number) {
   const b = `agent/issue-${issue}`;
-  try { if (sh(`git ls-remote --heads origin ${b}`)) { log(`deleting stale ${b}`); sh(`git push origin --delete ${b}`); } } catch {}
-  try { sh(`git branch -D ${b}`); } catch {}
+  try { if (sh(`git ls-remote --heads origin ${shq(b)}`)) { log(`deleting stale ${b}`); sh(`git push origin --delete ${shq(b)}`); } } catch {}
+  try { sh(`git branch -D ${shq(b)}`); } catch {}
 }
 
 // PR classification before the conflict path (#61). An orphan — its source branch doesn't exist
@@ -372,7 +372,7 @@ async function main(): Promise<void> {
     try {
       ensureHostOnDefaultBranch(); // recover if an interrupted run left the host repo on an agent branch
       pruneWorktrees(); // clear worktrees leaked by torn-down sandbox containers before any branch op
-      sh(`git fetch origin ${cfg.defaultBranch}`);
+      sh(`git fetch origin ${shq(cfg.defaultBranch)}`);
       // Blocker-sweep EVERY cycle, not only when idle (#47): promote blocked issues whose
       // deps have all closed. It's deterministic, synchronous, forge-only (no container, no
       // LLM) and idempotent — cheap enough to run unconditionally. It used to run only in the
@@ -689,7 +689,7 @@ async function main(): Promise<void> {
         if (next) {
           const n = next.number;
           log(`dispatching #${n}: ${next.title}`);
-          sh(`git fetch origin ${cfg.defaultBranch}`);
+          sh(`git fetch origin ${shq(cfg.defaultBranch)}`);
           // A run killed mid-work (idle timeout, crash) leaves a `wip(#n): checkpoint` commit on
           // its branch; resume from it instead of deleting it, up to maxResume times (#53).
           let implementResult: RunResult | undefined;

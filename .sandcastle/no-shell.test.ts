@@ -94,3 +94,32 @@ test("lint: no host shell string built with JSON.stringify, and the forge client
   assert.doesNotMatch(client, /\.join\(" "\)/);
   assert.doesNotMatch(readFileSync(join(dir, "config.ts"), "utf8"), /execSync\(`\$\{JSON\.stringify\(FORGE\)\}/);
 });
+
+test("lint: every ${…} in a host shell template goes through shq() (allowlist: built-in command fragments)", () => {
+  // Fragments that are deliberately whole command text, built by the loop from shq'd parts or from the
+  // operator's own config: the identity flags (`as`), the e2e command and its shq'd grep option.
+  const ALLOW = new Set(["${as}", "${cfg.e2e}", "${g}"]);
+  const dir = join(ROOT, ".sandcastle");
+  const offenders: string[] = [];
+  // Drop ${shq(...)} spans (balanced), then any ${…} left over is an unquoted interpolation.
+  const stripShq = (t: string): string => {
+    let out = "", i = 0;
+    while (i < t.length) {
+      if (t.startsWith("${shq(", i)) {
+        let depth = 0, j = i + 1;
+        for (; j < t.length; j++) { if (t[j] === "{") depth++; else if (t[j] === "}" && --depth === 0) break; }
+        i = j + 1; continue;
+      }
+      out += t[i++];
+    }
+    return out;
+  };
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "gen-forge-client.ts")) {
+    readFileSync(join(dir, f), "utf8").split("\n").forEach((line, i) => {
+      for (const m of line.matchAll(/\b(?:sh|run|shSafe|execSync)\(`((?:[^`\\]|\\.|`[^`]*`)*?)`\s*[,)]/g)) {
+        for (const v of stripShq(m[1]).match(/\$\{[^}]*\}/g) ?? []) if (!ALLOW.has(v)) offenders.push(`${f}:${i + 1} ${v}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], "quote it with shq(), or pass argv via execFileSync");
+});

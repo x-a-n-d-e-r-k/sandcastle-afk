@@ -48,6 +48,8 @@ export const closedIssuePrAction = (o: { headExists: boolean | "error"; landed: 
 // is already on base, and verify a merge actually finalized.
 
 type Run = (cmd: string, cwd: string) => string;
+// Same as config.ts shq — duplicated so this module stays import-free (no config load in its tests).
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // Pure: merging the branch into base would produce base's own tree, i.e. the change is already there.
 export const alreadyLanded = (baseTree: string, mergedTree: string): boolean =>
@@ -60,10 +62,10 @@ export const alreadyLanded = (baseTree: string, mergedTree: string): boolean =>
 // sets it: an abandoned PR usually conflicts with a base that moved on, and treating that as a
 // transient error left it in flight forever. Fetch / rev-parse failures always throw.
 export const landedOnBase = (o: { repo: string; base: string; branch: string; run: Run; conflictMeansNotLanded?: boolean }): boolean => {
-  o.run(`git fetch -q origin ${o.base} ${o.branch}`, o.repo);
-  const baseTree = o.run(`git rev-parse origin/${o.base}^{tree}`, o.repo);
+  o.run(`git fetch -q origin ${shq(o.base)} ${shq(o.branch)}`, o.repo);
+  const baseTree = o.run(`git rev-parse ${shq(`origin/${o.base}^{tree}`)}`, o.repo);
   let mergedTree: string;
-  try { mergedTree = o.run(`git merge-tree --write-tree origin/${o.base} origin/${o.branch}`, o.repo).split("\n")[0].trim(); }
+  try { mergedTree = o.run(`git merge-tree --write-tree ${shq(`origin/${o.base}`)} ${shq(`origin/${o.branch}`)}`, o.repo).split("\n")[0].trim(); }
   catch (e) {
     // Exit 1 = a conflict — or an unresolvable ref (git reports both as 1). Here both refs were just
     // fetched and base rev-parsed, so it is a conflict in practice; either way "not landed" only parks

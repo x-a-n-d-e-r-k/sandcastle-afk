@@ -30,19 +30,19 @@ export const mechanicalMerge = (o: {
   onMerged?: (oldHead: string, newHead: string) => void;
 }): MechanicalOutcome => {
   const run = o.run ?? sh;
-  run(`git fetch origin ${o.base} ${o.branch}`, o.repo);
+  run(`git fetch origin ${shq(o.base)} ${shq(o.branch)}`, o.repo);
   const wt = mkdtempSync(join(tmpdir(), "afk-merge-"));
   try {
-    run(`git worktree add --detach ${shq(wt)} origin/${o.branch}`, o.repo);
+    run(`git worktree add --detach ${shq(wt)} ${shq(`origin/${o.branch}`)}`, o.repo);
     const oldHead = run("git rev-parse HEAD", wt).trim();
     const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
     try {
-      run(`git ${as} merge --no-edit origin/${o.base}`, wt);
+      run(`git ${as} merge --no-edit ${shq(`origin/${o.base}`)}`, wt);
     } catch {
       try { run("git merge --abort", wt); } catch {}
       return "conflicted";
     }
-    run(`git push origin HEAD:refs/heads/${o.branch}`, wt);
+    run(`git push origin ${shq(`HEAD:refs/heads/${o.branch}`)}`, wt);
     o.onMerged?.(oldHead, run("git rev-parse HEAD", wt).trim());
     return "merged";
   } finally {
@@ -70,8 +70,8 @@ const names = (out: string): string[] => out.split("\n").map((s) => s.trim()).fi
 export const baseMergeOverlap = (o: { repo: string; base: string; oldHead: string; newHead: string; run?: Run }): string[] => {
   const run = o.run ?? sh;
   // The PR's own change as of before the merge: merge-base(oldHead, base)..oldHead.
-  const mb = run(`git merge-base ${shq(o.oldHead)} origin/${o.base}`, o.repo).trim();
-  const own = new Set(names(run(`git diff --name-only ${mb} ${shq(o.oldHead)}`, o.repo)));
+  const mb = run(`git merge-base ${shq(o.oldHead)} ${shq(`origin/${o.base}`)}`, o.repo).trim();
+  const own = new Set(names(run(`git diff --name-only ${shq(mb)} ${shq(o.oldHead)}`, o.repo)));
   const overlap = names(run(`git diff --name-only ${shq(o.oldHead)} ${shq(o.newHead)}`, o.repo)).filter((f) => own.has(f));
   return overlap.filter((f) => !isUnionMerged(o.repo, o.newHead, f, run));
 };
@@ -85,14 +85,14 @@ const isUnionMerged = (repo: string, rev: string, file: string, run: Run): boole
 // The base tip to measure an agent resolution against, captured BEFORE the agent runs: if
 // main moves again mid-run, the agent still succeeded at what it was asked to do.
 export const baseTip = (repo: string, base: string, run: Run = sh): string => {
-  run(`git fetch origin ${base}`, repo);
-  return run(`git rev-parse origin/${base}`, repo);
+  run(`git fetch origin ${shq(base)}`, repo);
+  return run(`git rev-parse ${shq(`origin/${base}`)}`, repo);
 };
 
 // Did the agent's push actually resolve? True iff the pushed branch now contains `sha`.
 export const branchContains = (repo: string, branch: string, sha: string, run: Run = sh): boolean => {
-  run(`git fetch origin ${branch}`, repo);
-  try { run(`git merge-base --is-ancestor ${sha} origin/${branch}`, repo); return true; }
+  run(`git fetch origin ${shq(branch)}`, repo);
+  try { run(`git merge-base --is-ancestor ${shq(sha)} ${shq(`origin/${branch}`)}`, repo); return true; }
   catch { return false; }
 };
 
