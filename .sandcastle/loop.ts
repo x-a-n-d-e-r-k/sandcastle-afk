@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions, type RunResult } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
+import { ROOT, cfg, sh, log, sleep, loadAgentRules, pruneWorktrees, ensureHostOnDefaultBranch, reviewAgentEnv, checkReviewCredential, renderPreflight, phaseRules, ORPHAN_LABEL, BLOCKED_LABEL, isAgentBranch, requireGitIdentity, gitSetupCommand, type GitIdentity } from "./config.js";
 import * as forge from "./forge-client.js";
 import { pickNextIssue, realPickDeps, MINE, issueNumOf, ownedIssueNumbers, inFlightPrs } from "./claim.js";
 import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } from "./triage.js";
@@ -149,7 +149,8 @@ export const triageOpts = (): RunOptions => {
   };
 };
 
-const getAgentPRs = (): PR[] => forge.prList().filter((p) => p.headRef.startsWith("agent/issue-"));
+// isAgentBranch, not a prefix match: the head ref is forge-supplied and reaches host `git` (#97).
+const getAgentPRs = (): PR[] => forge.prList().filter((p) => isAgentBranch(p.headRef));
 const syncBranch = (b: string) => { ensureHostOnDefaultBranch(); sh(`git fetch origin ${b}`); pruneWorktrees(); sh(`git branch -f ${b} origin/${b}`); };
 
 // A leftover `agent/issue-N` branch (from a failed/incomplete dispatch) gets REUSED by
@@ -196,7 +197,7 @@ export function handleOrphan(pr: { number: number; headRef: string }, d: OrphanD
 // Live forge wiring for closing a PR's linked issue and releasing this loop's claim (#70).
 const issueCloseDeps: IssueCloseDeps = {
   issueState: (n) => forge.issueView(n).state,
-  closeIssue: (n, comment) => forge.issueClose(n, "--comment", JSON.stringify(comment)),
+  closeIssue: (n, comment) => forge.issueClose(n, "--comment", comment),
   releaseClaim: (n) => { if (MINE) forge.issueEdit(n, "--remove-label", MINE); },
   log,
 };
@@ -218,7 +219,7 @@ const reviewPr = (pr: number, branch: string, issue: string, prior: string) =>
     review: () => runGuarded(reviewOpts(pr, branch, issue, prior)),
     isNoVerdictError: (e) => checkpointReason(e) === "idle timeout",
     feedback: () => forge.prFeedback(pr),
-    mark: (m) => forge.prComment(pr, "--body", JSON.stringify(m)),
+    mark: (m) => forge.prComment(pr, "--body", m),
     escalate: (n, head) => {
       log(`PR #${pr}: ${n} reviews of ${head.slice(0, 8)} ended without a verdict -> escalating to ${L.needsHuman}`);
       escalate(pr, `${n} review runs of head ${head.slice(0, 8)} ended without a verdict: the reviewer stopped before posting approve / request-changes (often a preflight it left running in the background). Removing \`${L.needsHuman}\` allows one more review; a new commit starts a fresh count`);
@@ -288,15 +289,15 @@ function keepApproval(pr: number, before: string, m: { oldHead: string; newHead:
   if (before !== "APPROVED" || EXTERNAL) return;
   try {
     if (forge.prList().find((p) => p.number === pr)?.reviewState === "APPROVED") return;
-    forge.prApprove(pr, "--as-reviewer", "--body", JSON.stringify(
-      `AFK: re-approving after a mechanical merge of ${cfg.defaultBranch} (${m.oldHead.slice(0, 8)} -> ${m.newHead.slice(0, 8)}). The merge changed none of this PR's own files (merge=union files aside), so the approved change is unchanged.`));
+    forge.prApprove(pr, "--as-reviewer", "--body",
+      `AFK: re-approving after a mechanical merge of ${cfg.defaultBranch} (${m.oldHead.slice(0, 8)} -> ${m.newHead.slice(0, 8)}). The merge changed none of this PR's own files (merge=union files aside), so the approved change is unchanged.`);
     log(`PR #${pr}: approval dismissed by the push -> carried forward`);
   } catch (e) { log(`PR #${pr}: could not carry the approval forward (${(e as Error).message.split("\n")[0]}); it will be reviewed again`); }
 }
 
 function escalate(pr: number, reason: string) {
   forge.prLabel(pr, "--add-label", L.needsHuman);
-  forge.prComment(pr, "--body", JSON.stringify(`AFK: ${reason}. Parking for a human.`));
+  forge.prComment(pr, "--body", `AFK: ${reason}. Parking for a human.`);
 }
 
 // Deterministic blocker-sweep backstop, bound to forge. Runs synchronously between
@@ -312,7 +313,7 @@ function runTriageSweep() {
     unblock: (n) => { forge.issueEdit(n, "--remove-label", BLOCKED_LABEL); },
     blockedLabel: BLOCKED_LABEL,
     hasMarkerComment: (n) => forge.issueComments(n).includes(TRIAGE_MARKER),
-    comment: (n, body) => { forge.issueComment(n, "--body", JSON.stringify(body)); },
+    comment: (n, body) => { forge.issueComment(n, "--body", body); },
   });
   if (promoted.length) log(`triage: unblocked ${promoted.length} issue(s) (all blockers closed): ${promoted.join(", ")}`);
 }
@@ -444,7 +445,7 @@ async function main(): Promise<void> {
             if (action === "orphan") {
               const n = issueNumOf(branch);
               handleOrphan(pr, {
-                comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
+                comment: (body) => forge.prComment(pr.number, "--body", body),
                 label: (l) => forge.prLabel(pr.number, "--add-label", l),
                 close: () => forge.prClose(pr.number),
                 releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
@@ -452,7 +453,7 @@ async function main(): Promise<void> {
               });
             } else if (action === "finalize") {
               log(`PR #${pr.number}: issue #${issue} is closed and its change is on ${cfg.defaultBranch} -> closing the PR`);
-              forge.prComment(pr.number, "--body", JSON.stringify(`AFK: this change is already on ${cfg.defaultBranch} and issue #${issue} is closed — closing this PR so it is not merged again.`));
+              forge.prComment(pr.number, "--body", `AFK: this change is already on ${cfg.defaultBranch} and issue #${issue} is closed — closing this PR so it is not merged again.`);
               forge.prClose(pr.number);
               closeLinkedIssue(Number(issue), pr.number, issueCloseDeps);
             } else {
@@ -490,7 +491,7 @@ async function main(): Promise<void> {
           } else if (cls === "orphan") {
             const n = issueNumOf(branch);
             handleOrphan(pr, {
-              comment: (body) => forge.prComment(pr.number, "--body", JSON.stringify(body)),
+              comment: (body) => forge.prComment(pr.number, "--body", body),
               label: (l) => forge.prLabel(pr.number, "--add-label", l),
               close: () => forge.prClose(pr.number),
               releaseClaim: () => { if (MINE && !Number.isNaN(n)) forge.issueEdit(n, "--remove-label", MINE); },
@@ -608,8 +609,8 @@ async function main(): Promise<void> {
                 }
                 vg = rr.gate;
                 const n = vg.required ? vg.artifacts.length : 0;
-                forge.prComment(pr.number, "--body", JSON.stringify(
-                  `AFK: the head moved to ${head.slice(0, 8)} after the last render, so the loop re-ran \`${ui.renderCmd}\` there: ${n} screenshot(s) at \`${ab}:${artifactPrefix(pr.number, head)}\`.`));
+                forge.prComment(pr.number, "--body",
+                  `AFK: the head moved to ${head.slice(0, 8)} after the last render, so the loop re-ran \`${ui.renderCmd}\` there: ${n} screenshot(s) at \`${ab}:${artifactPrefix(pr.number, head)}\`.`);
               }
               const pl = forge.prPipeline(pr.number);
               if (["success", "skipped", "none"].includes(pl.status)) {
@@ -624,7 +625,7 @@ async function main(): Promise<void> {
                     const body = why === "already-landed"
                       ? `AFK: this change is already on ${cfg.defaultBranch} — closing instead of merging it again.`
                       : `AFK: the merge landed on ${cfg.defaultBranch} but the forge did not finalize this PR — closing it so it is not merged again.`;
-                    forge.prComment(pr.number, "--body", JSON.stringify(body));
+                    forge.prComment(pr.number, "--body", body);
                     forge.prClose(pr.number);
                   },
                   closeIssue: () => { if (issue) closeLinkedIssue(Number(issue), pr.number, issueCloseDeps); },
@@ -696,11 +697,11 @@ async function main(): Promise<void> {
             maxResume: cfg.maxResume,
             hasCheckpoint: () => hasCheckpoint({ issue: n, repo: ROOT, base: cfg.defaultBranch }),
             resumes: () => countResumes(forge.issueComments(n)),
-            markResume: (k) => forge.issueComment(n, "--body", JSON.stringify(`${RESUME_MARKER} resuming from checkpoint (${k}/${cfg.maxResume})`)),
+            markResume: (k) => forge.issueComment(n, "--body", `${RESUME_MARKER} resuming from checkpoint (${k}/${cfg.maxResume})`),
             escalate: (k) => {
               log(`#${n} resumed ${k}/${cfg.maxResume} times without finishing -> escalating to ${L.needsHuman}`);
               forge.issueEdit(n, "--add-label", L.needsHuman);
-              forge.issueComment(n, "--body", JSON.stringify(`AFK: implement was cut off and resumed from a checkpoint ${k} time(s) (maxResume ${cfg.maxResume}) without opening a PR. The work so far is on \`agent/issue-${n}\`. Parking for a human.`));
+              forge.issueComment(n, "--body", `AFK: implement was cut off and resumed from a checkpoint ${k} time(s) (maxResume ${cfg.maxResume}) without opening a PR. The work so far is on \`agent/issue-${n}\`. Parking for a human.`);
             },
             deleteBranch: () => deleteStaleBranch(n),
             keepBranch: () => syncBranch(`agent/issue-${n}`),
@@ -722,12 +723,12 @@ async function main(): Promise<void> {
                 return issueFingerprint(forge.issueView(n).body ?? "", discussion);
               },
               comments: () => forge.issueComments(n),
-              mark: (marker) => forge.issueComment(n, "--body", JSON.stringify(`${marker} implement ended without opening a PR.`)),
+              mark: (marker) => forge.issueComment(n, "--body", `${marker} implement ended without opening a PR.`),
               escalate: (reason, said) => {
                 forge.issueEdit(n, "--add-label", L.needsHuman);
-                forge.issueComment(n, "--body", JSON.stringify(
+                forge.issueComment(n, "--body",
                   `AFK: ${reason}. Parking for a human.${said ? `\n\nThe agent's last words:\n\n${quote(said)}` : ""}\n\n` +
-                  `To retry: answer the blocker (edit the issue body or add a maintainer comment — either resets the count) and remove \`${L.needsHuman}\`.`));
+                  `To retry: answer the blocker (edit the issue body or add a maintainer comment — either resets the count) and remove \`${L.needsHuman}\`.`);
                 if (MINE) forge.issueEdit(n, "--remove-label", MINE);
               },
               log,

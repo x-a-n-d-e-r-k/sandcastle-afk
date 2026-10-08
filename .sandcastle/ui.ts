@@ -1,4 +1,4 @@
-import { cfg, sh, type UiVerifyCfg } from "./config.js";
+import { cfg, sh, shq, isHexSha, type UiVerifyCfg } from "./config.js";
 
 // Visual verification for UI-touching PRs (#19).
 //
@@ -137,7 +137,8 @@ export const renderedHeads = (pr: number, branch: string = DEFAULT_ARTIFACT_BRAN
   try { run(`git fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"`); } catch { return []; }
   try {
     return run(`git ls-tree -d --name-only origin/${branch} -- "pr-${pr}/"`)
-      .split("\n").map((s) => s.trim().slice(`pr-${pr}/`.length)).filter((s) => s && s !== "render-inputs");
+      // Only hex SHAs: these dir names are pushed content, and they reach host `git` (#97).
+      .split("\n").map((s) => s.trim().slice(`pr-${pr}/`.length)).filter((s) => isHexSha(s));
   } catch { return []; }
 };
 
@@ -259,7 +260,7 @@ export const implementUiBlock = (ui: UiCfg | undefined): string => {
   const persistInputs = inputs.length
     ? `\n   # render inputs: lets the loop re-render at a newer head instead of parking the PR
    rm -rf "$tmp/pr-$PR/render-inputs" && mkdir -p "$tmp/pr-$PR/render-inputs"
-   tar -cf - ${inputs.map((p) => JSON.stringify(p)).join(" ")} | tar -xf - -C "$tmp/pr-$PR/render-inputs"`
+   tar -cf - ${inputs.map((p) => shq(p)).join(" ")} | tar -xf - -C "$tmp/pr-$PR/render-inputs"`
     : "";
   return `## Visual verification (REQUIRED if you touch UI)
 

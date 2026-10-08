@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { cfg, sh, log, ROOT } from "./config.js";
+import { writeFileSync, rmSync } from "node:fs";
+import { cfg, sh, shq, log, ROOT } from "./config.js";
 import * as forge from "./forge-client.js";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ function parseFailures(json: string): Failure[] {
   return out;
 }
 function runE2E(grep?: string): Failure[] {
-  const g = grep ? ` -g ${JSON.stringify(grep)}` : "";
+  const g = grep ? ` -g ${shq(grep)}` : ""; // a test title is repo content: shell-quote it (#97)
   return parseFailures(shSafe(`${cfg.e2e} --reporter=json${g}`, `${ROOT}/${WT}`));
 }
 // ==========================================================================
@@ -70,10 +71,13 @@ function fileIssue(f: Failure) {
     ``, `## Gates (for the implementing agent)`,
     `Before opening the PR, all must be green: ${gates}, plus \`${cfg.e2e}\` for the affected spec. PR body must contain \`Closes #<this issue>\`.`,
   ].join("\n");
+  // Written by Node and passed as argv (#97): no heredoc (a body line "AFKEOF" ended it early and ran
+  // the rest as commands) and no shell around the title.
   const tmp = `${ROOT}/.sandcastle/.sentinel-issue.md`;
-  sh(`cat > ${JSON.stringify(tmp)} <<'AFKEOF'\n${body}\nAFKEOF`);
-  const url = forge.issueCreate("--title", JSON.stringify(title), "--label", cfg.labels.ready, "--label", cfg.labels.e2eRegression, "--body-file", JSON.stringify(tmp));
-  sh(`rm -f ${JSON.stringify(tmp)}`);
+  writeFileSync(tmp, body);
+  let url: string;
+  try { url = forge.issueCreate("--title", title, "--label", cfg.labels.ready, "--label", cfg.labels.e2eRegression, "--body-file", tmp); }
+  finally { rmSync(tmp, { force: true }); }
   log(`filed: ${url}`);
 }
 

@@ -131,8 +131,10 @@ case "$verb" in
       while read -r f; do args+=("$f"); done < <(gh_label_flags "${labels[@]}")
       gh "${args[@]}"
     else
-      glab issue create --title "$title" --description "$(cat "$body_file")" \
-        $( [[ ${#labels[@]} -gt 0 ]] && echo --label "$(csv "${labels[@]}")" ) --yes
+      # Optional flags go in an array, never an unquoted $(...): that word-split and glob-expanded the
+      # value, so text could become extra CLI flags (#97). ${a[@]+"${a[@]}"}: empty-safe on bash 3.2 + set -u.
+      opt=(); [[ ${#labels[@]} -gt 0 ]] && opt+=(--label "$(csv "${labels[@]}")")
+      glab issue create --title "$title" --description "$(cat "$body_file")" ${opt[@]+"${opt[@]}"} --yes
     fi ;;
 
   issue-edit)
@@ -154,7 +156,8 @@ case "$verb" in
   issue-close)
     [[ -n "$NUM" ]] || die "issue-close needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      gh issue close "$NUM" $( [[ -n "$comment" ]] && echo --comment "$comment" )
+      opt=(); [[ -n "$comment" ]] && opt+=(--comment "$comment")
+      gh issue close "$NUM" ${opt[@]+"${opt[@]}"}
     else
       [[ -n "$comment" ]] && glab issue note "$NUM" -m "$comment" || true
       glab issue close "$NUM"
@@ -379,7 +382,8 @@ case "$verb" in
   pr-approve)
     [[ -n "$NUM" ]] || die "pr-approve needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      gh pr review "$NUM" --approve $( [[ -n "$body" ]] && echo --body "$body" )
+      opt=(); [[ -n "$body" ]] && opt+=(--body "$body")
+      gh pr review "$NUM" --approve ${opt[@]+"${opt[@]}"}
     else
       glab mr approve "$NUM"
       [[ -n "$body" ]] && glab mr note "$NUM" -m "$body" || true

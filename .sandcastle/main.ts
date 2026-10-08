@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, phaseRules, renderPreflight, requireGitIdentity, gitSetupCommand } from "./config.js";
+import { cfg, sh, log, isExcluded, priorityRank, loadAgentRules, phaseRules, renderPreflight, requireGitIdentity, gitSetupCommand, isAgentBranch } from "./config.js";
 import * as forge from "./forge-client.js";
 import { implementUiBlock } from "./ui.js";
 import { isEntryPoint } from "./entry.js";
@@ -28,7 +28,7 @@ export const mainImplementOpts = (issue: number): RunOptions => ({
 async function main(): Promise<void> {
   const issues = forge.issueList("--label", cfg.labels.ready);
   const openHeads = new Set(
-    forge.prList().filter((p) => p.headRef.startsWith("agent/issue-")).map((p) => p.headRef),
+    forge.prList().filter((p) => isAgentBranch(p.headRef)).map((p) => p.headRef),
   );
   const next = issues
     .filter((i) => !isExcluded(i.labels))
