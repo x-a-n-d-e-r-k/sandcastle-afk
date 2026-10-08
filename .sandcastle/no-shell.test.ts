@@ -114,12 +114,17 @@ test("lint: every ${…} in a host shell template goes through shq() (allowlist:
     }
     return out;
   };
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "gen-forge-client.ts")) {
-    readFileSync(join(dir, f), "utf8").split("\n").forEach((line, i) => {
-      for (const m of line.matchAll(/\b(?:sh|run|shSafe|execSync)\(`((?:[^`\\]|\\.|`[^`]*`)*?)`\s*[,)]/g)) {
-        for (const v of stripShq(m[1]).match(/\$\{[^}]*\}/g) ?? []) if (!ALLOW.has(v)) offenders.push(`${f}:${i + 1} ${v}`);
-      }
-    });
+  // Whole-file match, so a template that starts on the line after `sh(` is caught too; scripts/ as well.
+  const files = [
+    ...readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && f !== "gen-forge-client.ts").map((f) => join(dir, f)),
+    ...readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".ts")).map((f) => join(ROOT, "scripts", f)),
+  ];
+  for (const path of files) {
+    const src = readFileSync(path, "utf8");
+    for (const m of src.matchAll(/\b(?:sh|run|shSafe|execSync)\(\s*`((?:[^`\\]|\\.|`[^`]*`)*?)`\s*[,)]/g)) {
+      const line = src.slice(0, m.index).split("\n").length;
+      for (const v of stripShq(m[1]).match(/\$\{[^}]*\}/g) ?? []) if (!ALLOW.has(v)) offenders.push(`${path.slice(ROOT.length + 1)}:${line} ${v}`);
+    }
   }
   assert.deepEqual(offenders, [], "quote it with shq(), or pass argv via execFileSync");
 });

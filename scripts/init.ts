@@ -111,7 +111,7 @@ console.log("installed skill -> .claude/skills/agent-ready-issue/");
 // ---- optional: build image + create labels ---------------------------------
 if (args.includes("--build")) {
   console.log("building image (this can take a few minutes)...");
-  execSync(`npx sandcastle docker build-image --image-name ${C.imageName}`, { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } });
+  execFileSync("npx", ["sandcastle", "docker", "build-image", "--image-name", String(C.imageName)], { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } });
 }
 if (args.includes("--labels")) {
   process.env.FORGE_PLATFORM = C.platform;
