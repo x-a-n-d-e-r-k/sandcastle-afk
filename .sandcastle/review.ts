@@ -1,6 +1,6 @@
 import { run, claudeCode, type RunOptions } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight } from "./config.js";
+import { cfg, sh, log, loadAgentRules, phaseRules, reviewAgentEnv, checkReviewCredential, renderPreflight, isSafeRef, shq } from "./config.js";
 import * as forge from "./forge-client.js";
 import { uiGate, reviewUiBlock } from "./ui.js";
 import { isEntryPoint } from "./entry.js";
@@ -35,6 +35,8 @@ async function main(): Promise<void> {
 
   const pr = forge.prView(Number(PR));
   const branch = pr.headRef;
+  // Forge-supplied and interpolated into host `git` below: refuse anything a shell could interpret (#97).
+  if (!isSafeRef(branch)) { console.error(`refusing PR #${PR}: unsafe head branch name ${JSON.stringify(branch)}`); process.exit(1); }
   // The branch fallback is a genuine safety net, but it also hides the defect it rescues:
   // a PR whose body lacks a closing keyword reviews and merges green, then leaves its issue
   // open forever. Keep the fallback; make it loud. (forge pr-create now prevents this at the
@@ -46,8 +48,8 @@ async function main(): Promise<void> {
     console.warn(`Warning: PR #${PR} body has no closing keyword; derived issue #${issue} from branch '${branch}'. The issue will NOT auto-close on merge.`);
   if (!issue) console.warn("Warning: could not derive issue number from PR body or branch.");
 
-  sh(`git fetch origin ${branch}`);
-  sh(`git branch -f ${branch} origin/${branch}`);
+  sh(`git fetch origin ${shq(branch)}`);
+  sh(`git branch -f ${shq(branch)} ${shq(`origin/${branch}`)}`);
 
   // The re-review is not stateless (#81): show it the latest blocking review and any rebuttal.
   let prior = "";

@@ -61,7 +61,7 @@ let cleanup: (() => void) | null = null;
 if (isUrl) {
   layerDir = join(tmpdir(), `afk-layer-${Date.now()}`);
   console.log(`Cloning layer ${sourceUrl} ...`);
-  sh(`git clone --depth 1 ${JSON.stringify(sourceUrl)} ${JSON.stringify(layerDir)}`);
+  execFileSync("git", ["clone", "--depth", "1", "--", sourceUrl, layerDir], { stdio: "inherit" }); // argv, no shell (#97)
   cleanup = () => rmSync(layerDir, { recursive: true, force: true });
 } else if (!existsSync(layerDir)) {
   console.error(`Layer path does not exist: ${layerDir}`);
@@ -203,7 +203,7 @@ try {
   const mergeHelper = join(ROOT, "scripts", "merge-package-json.cjs");
   if (existsSync(mergeHelper)) {
     // adds missing deps + missing afk:* scripts without clobbering other keys
-    tryf(() => { execSync(`node ${JSON.stringify(mergeHelper)} ${JSON.stringify(join(layerDir, "package.json"))}`, { cwd: ROOT, stdio: "inherit" }); return 0; }, 0);
+    tryf(() => { execFileSync(process.execPath, [mergeHelper, join(layerDir, "package.json")], { cwd: ROOT, stdio: "inherit" }); return 0; }, 0);
   }
   // Re-read after the helper, then update afk:* script VALUES + base version.
   const pkg2 = readJson(projectPkgPath);

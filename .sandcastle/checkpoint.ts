@@ -56,7 +56,7 @@ export const checkpointAfterFailure = (o: {
   const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
   run("git add -A", wt);
   run(`git ${as} commit -q --no-verify -m ${shq(`${CHECKPOINT_PREFIX(o.issue)} after ${checkpointReason(o.err)}`)}`, wt);
-  run(`git push -q origin HEAD:refs/heads/${branchOf(o.issue)}`, wt);
+  run(`git push -q origin ${shq(`HEAD:refs/heads/${branchOf(o.issue)}`)}`, wt);
   return "checkpointed";
 };
 
@@ -64,9 +64,9 @@ export const checkpointAfterFailure = (o: {
 export const hasCheckpoint = (o: { issue: number; repo: string; base: string; run?: Run }): boolean => {
   const run = o.run ?? sh;
   const b = branchOf(o.issue);
-  if (!run(`git ls-remote --heads origin ${b}`, o.repo)) return false;
-  run(`git fetch -q origin ${o.base} ${b}`, o.repo);
-  const subjects = run(`git log --format=%s origin/${o.base}..origin/${b}`, o.repo).split("\n");
+  if (!run(`git ls-remote --heads origin ${shq(b)}`, o.repo)) return false;
+  run(`git fetch -q origin ${shq(o.base)} ${shq(b)}`, o.repo);
+  const subjects = run(`git log --format=%s ${shq(`origin/${o.base}..origin/${b}`)}`, o.repo).split("\n");
   return subjects.some((s) => s.startsWith(CHECKPOINT_PREFIX(o.issue)));
 };
 

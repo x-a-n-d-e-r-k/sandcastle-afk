@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 // Required-key validators live in config-contract.ts (#77): side-effect free, so afk:update can run
@@ -158,6 +158,14 @@ export const DEFAULT_BLOCKED_LABEL = "blocked";
 export const BLOCKED_LABEL = cfg.labels.blocked ?? DEFAULT_BLOCKED_LABEL;
 
 // Single-quote a value for a POSIX shell command line.
+// Refs that reach host `git` through sh() come from the FORGE (PR head branches) or from pushed content
+// (artifact-branch dir names) — and git allows $ ( ) ` ; & | in ref names. Only refs that pass these
+// checks are ever interpolated into a host shell command (#97).
+export const isSafeRef = (r: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(r) && !r.includes("..");
+/** The only branches the loop drives: the ones it creates. Exact, not a prefix. */
+export const isAgentBranch = (r: string): boolean => /^agent\/issue-\d+$/.test(r);
+export const isHexSha = (s: string): boolean => /^[0-9a-f]{7,64}$/.test(s);
+
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 // The sandbox hook that sets push credentials AND pins the commit identity. It runs after
@@ -206,10 +214,10 @@ export const pruneWorktrees = (run: (c: string) => string = sh) => {
     for (const p of parseSandcastleWorktrees(run("git worktree list --porcelain"))) {
       log(`removing leaked sandcastle worktree ${p}`);
       try {
-        run(`git worktree remove --force ${JSON.stringify(p)}`); // (b) dir-present
+        run(`git worktree remove --force ${shq(p)}`); // (b) dir-present
       } catch {
-        try { run(`git worktree unlock ${JSON.stringify(p)}`); } catch {}
-        try { run(`git worktree remove --force ${JSON.stringify(p)}`); }
+        try { run(`git worktree unlock ${shq(p)}`); } catch {}
+        try { run(`git worktree remove --force ${shq(p)}`); }
         catch (e) { log(`could not remove leaked worktree ${p}: ${(e as Error).message}`); }
       }
     }
@@ -228,7 +236,7 @@ export const ensureHostOnDefaultBranch = () => {
   try {
     if (sh("git rev-parse --abbrev-ref HEAD") !== cfg.defaultBranch) {
       log(`host repo not on ${cfg.defaultBranch} — resetting (work is safe on the pushed branch/PR)`);
-      sh(`git checkout -f ${cfg.defaultBranch}`);
+      sh(`git checkout -f ${shq(cfg.defaultBranch)}`);
     }
   } catch (e) {
     log(`ensureHostOnDefaultBranch failed: ${(e as Error).message}`);
@@ -304,17 +312,21 @@ export const checkReviewCredential = (): void =>
     dotEnvHasToken: envFileDeclaresToken(),
   });
 
-// All forge calls go through here. `tokenEnv` lets a single call use a
-// different identity (e.g. the reviewer): forge("pr-approve 5", { GH_TOKEN: reviewToken }).
-export const forge = (args: string, tokenEnv: Record<string, string> = {}): string =>
-  execSync(`${JSON.stringify(FORGE)} ${args}`, {
-    encoding: "utf8",
-    cwd: ROOT,
-    env: { ...process.env, FORGE_PLATFORM: cfg.platform, ...tokenEnv },
-  }).trim();
+// All forge calls go through here, as an ARGV ARRAY run WITHOUT a shell (#97). It used to build one
+// shell string with free text "quoted" by JSON.stringify — which is not shell quoting: /bin/sh still
+// expanded backticks, $(...) and $VARS inside the double quotes, so an agent's message relayed as a
+// comment ran commands on the HOST (and could post token values). Each element is passed to bin/forge
+// verbatim; never join arguments into a string. `tokenEnv` lets a single call use a different identity
+// (e.g. the reviewer): forge(["pr-approve", 5], { GH_TOKEN: reviewToken }).
+export type ForgeArg = string | number;
+/** Exported with `bin` injectable for the no-shell test; everything else calls forge(). */
+export const runForge = (bin: string, argv: ForgeArg[], env: Record<string, string | undefined>): string =>
+  execFileSync(bin, argv.map(String), { encoding: "utf8", cwd: ROOT, env, maxBuffer: 64 * 1024 * 1024 }).trim();
+export const forge = (argv: ForgeArg[], tokenEnv: Record<string, string> = {}): string =>
+  runForge(FORGE, argv, { ...process.env, FORGE_PLATFORM: cfg.platform, ...tokenEnv });
 
-export const forgeJSON = <T = any>(args: string, tokenEnv: Record<string, string> = {}): T =>
-  JSON.parse(forge(args, tokenEnv) || "null");
+export const forgeJSON = <T = any>(argv: ForgeArg[], tokenEnv: Record<string, string> = {}): T =>
+  JSON.parse(forge(argv, tokenEnv) || "null");
 
 // The exclusion set for issue dispatch (supports "epic:foo" sub-labels too).
 // Priority: an ordered list, most-urgent first (e.g. highest, high, low, lowest).

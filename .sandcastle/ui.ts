@@ -1,4 +1,4 @@
-import { cfg, sh, type UiVerifyCfg } from "./config.js";
+import { cfg, sh, shq, isHexSha, type UiVerifyCfg } from "./config.js";
 
 // Visual verification for UI-touching PRs (#19).
 //
@@ -98,13 +98,13 @@ export const uiFilesTouched = (changed: string[], globs: string[]): string[] =>
 
 /** Files changed between two branches, via the merge-base (three-dot), host-side. */
 export const changedFiles = (base: string, head: string, run: (c: string) => string = sh): string[] => {
-  const out = run(`git diff --name-only origin/${base}...origin/${head}`);
+  const out = run(`git diff --name-only ${shq(`origin/${base}...origin/${head}`)}`);
   return out.split("\n").map((s) => s.trim()).filter(Boolean);
 };
 
 /** The PR branch's current tip SHA, read host-side. Injectable for testing. */
 export const headShaOf = (branch: string, run: (c: string) => string = sh): string =>
-  run(`git rev-parse origin/${branch}`).trim();
+  run(`git rev-parse ${shq(`origin/${branch}`)}`).trim();
 
 /** Artifact paths published for a PR at a specific head SHA, or [] if none exist there. */
 export const artifactsFor = (
@@ -116,13 +116,13 @@ export const artifactsFor = (
   try {
     // Explicit refspec: a bare `git fetch origin <branch>` only updates the tracking ref when
     // the clone's configured refspec happens to cover it (see #26).
-    run(`git fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"`);
+    run(`git fetch -q origin ${shq(`+refs/heads/${branch}:refs/remotes/origin/${branch}`)}`);
   } catch {
     return []; // branch doesn't exist yet => nothing published
   }
   try {
     // Scoped to pr-<n>/<sha>/ — a sibling SHA's dir under the same PR does not match.
-    const out = run(`git ls-tree -r --name-only origin/${branch} -- "${artifactPrefix(pr, headSha)}"`);
+    const out = run(`git ls-tree -r --name-only ${shq(`origin/${branch}`)} -- ${shq(artifactPrefix(pr, headSha))}`);
     return out.split("\n").map((s) => s.trim()).filter(Boolean);
   } catch {
     return [];
@@ -134,17 +134,18 @@ export const renderInputsPrefix = (pr: number): string => `pr-${pr}/render-input
 
 /** Head SHAs this PR has published screenshots for (the `pr-<n>/<sha>/` dirs), newest unknown. */
 export const renderedHeads = (pr: number, branch: string = DEFAULT_ARTIFACT_BRANCH, run: (c: string) => string = sh): string[] => {
-  try { run(`git fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"`); } catch { return []; }
+  try { run(`git fetch -q origin ${shq(`+refs/heads/${branch}:refs/remotes/origin/${branch}`)}`); } catch { return []; }
   try {
-    return run(`git ls-tree -d --name-only origin/${branch} -- "pr-${pr}/"`)
-      .split("\n").map((s) => s.trim().slice(`pr-${pr}/`.length)).filter((s) => s && s !== "render-inputs");
+    return run(`git ls-tree -d --name-only ${shq(`origin/${branch}`)} -- ${shq(`pr-${pr}/`)}`)
+      // Only hex SHAs: these dir names are pushed content, and they reach host `git` (#97).
+      .split("\n").map((s) => s.trim().slice(`pr-${pr}/`.length)).filter((s) => isHexSha(s));
   } catch { return []; }
 };
 
 /** Files persisted under the PR's render-inputs prefix, or [] (assumes the branch was fetched). */
 export const persistedRenderInputs = (pr: number, branch: string = DEFAULT_ARTIFACT_BRANCH, run: (c: string) => string = sh): string[] => {
   try {
-    return run(`git ls-tree -r --name-only origin/${branch} -- "${renderInputsPrefix(pr)}"`)
+    return run(`git ls-tree -r --name-only ${shq(`origin/${branch}`)} -- ${shq(renderInputsPrefix(pr))}`)
       .split("\n").map((s) => s.trim()).filter(Boolean);
   } catch { return []; }
 };
@@ -155,7 +156,7 @@ export const persistedRenderInputs = (pr: number, branch: string = DEFAULT_ARTIF
  * merge that changed shared UI makes an earlier render stale too. Throws if a commit isn't present.
  */
 export const uiChangedBetween = (a: string, b: string, ui: UiCfg, run: (c: string) => string = sh): string[] => {
-  const changed = run(`git diff --name-only ${a} ${b}`).split("\n").map((s) => s.trim()).filter(Boolean);
+  const changed = run(`git diff --name-only ${shq(a)} ${shq(b)}`).split("\n").map((s) => s.trim()).filter(Boolean);
   const canon = ui.canonDir ? ui.canonDir.replace(/\/+$/, "") + "/" : null;
   return changed.filter((f) => matchesAnyGlob(f, ui.verifyGlobs) || (canon !== null && f.startsWith(canon)));
 };
@@ -259,7 +260,7 @@ export const implementUiBlock = (ui: UiCfg | undefined): string => {
   const persistInputs = inputs.length
     ? `\n   # render inputs: lets the loop re-render at a newer head instead of parking the PR
    rm -rf "$tmp/pr-$PR/render-inputs" && mkdir -p "$tmp/pr-$PR/render-inputs"
-   tar -cf - ${inputs.map((p) => JSON.stringify(p)).join(" ")} | tar -xf - -C "$tmp/pr-$PR/render-inputs"`
+   tar -cf - ${inputs.map((p) => shq(p)).join(" ")} | tar -xf - -C "$tmp/pr-$PR/render-inputs"`
     : "";
   return `## Visual verification (REQUIRED if you touch UI)
 

@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, chmodSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 // pnpm afk:init [--build] [--labels]
@@ -111,24 +111,23 @@ console.log("installed skill -> .claude/skills/agent-ready-issue/");
 // ---- optional: build image + create labels ---------------------------------
 if (args.includes("--build")) {
   console.log("building image (this can take a few minutes)...");
-  execSync(`npx sandcastle docker build-image --image-name ${C.imageName}`, { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } });
+  execFileSync("npx", ["sandcastle", "docker", "build-image", "--image-name", String(C.imageName)], { stdio: "inherit", env: { ...process.env, NODE_ENV: "development" } });
 }
 if (args.includes("--labels")) {
   process.env.FORGE_PLATFORM = C.platform;
   const colors: Record<string, string> = { ready: "0E8A16", needsFeedback: "FBCA04", epic: "5319E7", idea: "C5DEF5", needsHuman: "B60205", e2eRegression: "D93F0B", orphan: "BFBFBF", blocked: "E99695" };
   // `orphan` (#61) and `blocked` (#78) are optional in older configs; the loop falls back to these defaults, so create them.
+  // argv, not a shell string (#97): JSON.stringify is not shell quoting.
+  const createLabel = (name: string, color: string) => {
+    if (C.platform === "github") execFileSync("gh", ["label", "create", name, "--color", color, "--force"], { stdio: "ignore" });
+    else execFileSync("glab", ["label", "create", "--name", name, "--color", `#${color}`], { stdio: "ignore" });
+  };
   for (const [k, name] of Object.entries({ orphan: "afk-orphan", blocked: "blocked", ...C.labels })) {
-    try {
-      if (C.platform === "github") execSync(`gh label create ${JSON.stringify(name)} --color ${colors[k] ?? "ededed"} --force`, { stdio: "ignore" });
-      else execSync(`glab label create --name ${JSON.stringify(name)} --color "#${colors[k] ?? "ededed"}"`, { stdio: "ignore" });
-    } catch {}
+    try { createLabel(String(name), colors[k] ?? "ededed"); } catch {}
   }
   const priColors = ["B60205", "D93F0B", "BFD4F2", "C5DEF5"];
   (C.priorityLabels ?? []).forEach((name: string, i: number) => {
-    try {
-      if (C.platform === "github") execSync(`gh label create ${JSON.stringify(name)} --color ${priColors[i] ?? "ededed"} --force`, { stdio: "ignore" });
-      else execSync(`glab label create --name ${JSON.stringify(name)} --color "#${priColors[i] ?? "ededed"}"`, { stdio: "ignore" });
-    } catch {}
+    try { createLabel(name, priColors[i] ?? "ededed"); } catch {}
   });
   console.log("ensured labels exist");
 }

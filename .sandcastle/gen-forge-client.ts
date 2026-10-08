@@ -54,7 +54,9 @@ export const generateClient = (registry: Record<string, Desc>): string => {
     const hasNum = d.requiredArgs.includes("number");
     const params = hasNum ? "num: number, ...rest: Arg[]" : "...rest: Arg[]";
     const argsArray = hasNum ? "[num, ...rest]" : "rest";
-    const call = `\`${verb} \${${argsArray}.join(" ")}\`.trim()`;
+    // An argv ARRAY, never a joined string: forge() runs bin/forge without a shell (#97), so each
+    // element — a comment body, a title — reaches the verb byte-for-byte, uninterpreted.
+    const call = `["${verb}", ...${argsArray}]`;
     const doc = d.deprecated ? `/** @deprecated ${d.deprecated} */\n` : "";
 
     if (d.output === "json") {

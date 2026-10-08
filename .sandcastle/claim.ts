@@ -8,7 +8,7 @@
 // This lives apart from loop.ts (which imports @ai-hero/sandcastle) on purpose: the
 // claim logic stays unit-testable with no sandbox runtime and no live forge — the deps
 // `pickNextIssue` needs are injected (realPickDeps wires the live ones).
-import { cfg, log, sleep, isExcluded, priorityRank, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
+import { cfg, log, sleep, isExcluded, priorityRank, isAgentBranch, LOOP_ID, WORKING, ORPHAN_LABEL, BLOCKED_LABEL } from "./config.js";
 import * as forge from "./forge-client.js";
 
 export type Issue = { number: number; title: string; labels: string[]; state?: string };
@@ -100,7 +100,7 @@ export async function pickNextIssue(allPRs: PR[], deps: PickDeps): Promise<Issue
   const isOrphan = (p: PR) => !p.merged && (p.labels ?? []).includes(ORPHAN_LABEL);
   const resolved = new Set(
     closed
-      .filter((p) => p.headRef.startsWith("agent/issue-") && !isOrphan(p))
+      .filter((p) => isAgentBranch(p.headRef) && !isOrphan(p))
       .map((p) => p.headRef),
   );
   const hasOpenWork = (n: number) =>

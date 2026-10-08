@@ -144,7 +144,7 @@ test("matchesAnyGlob is false against an empty glob list", () => {
 test("changedFiles uses a three-dot diff and drops blank lines", () => {
   let seen = "";
   const out = changedFiles("main", "agent/issue-1", (c) => { seen = c; return "a.tsx\n\nb.css\n"; });
-  assert.equal(seen, "git diff --name-only origin/main...origin/agent/issue-1");
+  assert.equal(seen, "git diff --name-only 'origin/main...origin/agent/issue-1'"); // shell-quoted (#97)
   assert.deepEqual(out, ["a.tsx", "b.css"]);
 });
 
@@ -159,7 +159,7 @@ test("artifactsFor scopes ls-tree to pr-<n>/<sha>/ (#35)", () => {
   assert.deepEqual(out, ["pr-42/abc123/desktop-light.png", "pr-42/abc123/mobile-dark.png"]);
   assert.ok(cmds[0].includes("+refs/heads/afk/artifacts:refs/remotes/origin/afk/artifacts"),
     "must fetch an explicit refspec so the tracking ref exists (#26)");
-  assert.ok(cmds[1].includes('-- "pr-42/abc123/"'), "must scope ls-tree to this PR's HEAD-SHA prefix");
+  assert.ok(cmds[1].includes("-- 'pr-42/abc123/'"), "must scope ls-tree to this PR's HEAD-SHA prefix");
   assert.ok(!cmds[1].includes('-- "pr-42/def999/"'), "must not scope to a different SHA's dir");
 });
 
@@ -306,7 +306,7 @@ test("uiChangedBetween: verifyGlobs matches plus canonDir; two-dot diff", () => 
   const run = (c: string) => { cmds.push(c); return "packages/core/a.ts\napps/web/App.tsx\ndocs/design/screens/01.html\nREADME.md\n"; };
   assert.deepEqual(uiChangedBetween("S", "H", UI, run), ["apps/web/App.tsx"]);
   assert.deepEqual(uiChangedBetween("S", "H", { ...UI, canonDir: "docs/design/" }, run), ["apps/web/App.tsx", "docs/design/screens/01.html"]);
-  assert.deepEqual(cmds[0], "git diff --name-only S H");
+  assert.deepEqual(cmds[0], "git diff --name-only 'S' 'H'");
 });
 
 test("reviewUiBlock tells the reviewer carried screenshots count", () => {
