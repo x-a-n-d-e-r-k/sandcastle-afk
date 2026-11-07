@@ -38,7 +38,22 @@ Common fixes you may hit (we did): package-manager version pinning (corepack pre
 
 The reviewer must be a **different account** than the implementer so its approval counts (neither platform lets an author approve their own request).
 
-**GitHub:** create two bot accounts, add both as **write collaborators**. Make fine-grained PATs (Contents RW, Pull requests RW, Issues RW, Metadata R). `GH_TOKEN` (implementer) and `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) go in `.sandcastle/.env`. Set `gitIdentity` in `afk.config.json` to the implementer bot's name + email: implement, heal and conflict-resolve all commit as it (otherwise each phase inherits whatever git identity the host clone has). The image also disables Claude Code's `Co-Authored-By` trailer. The reviewer token goes in `.sandcastle/.env.review` (host-only): `FORGE_REVIEW_TOKEN` = reviewer. **It must NOT go in `.sandcastle/.env`** — that file is injected into every agent sandbox, so a reviewer token there would let the implementer approve its own PR; the loop refuses to start if it finds one there.
+**GitHub:** create two bot accounts, add both as **write collaborators**. Make fine-grained PATs scoped to the repo with the permissions in the table below. `GH_TOKEN` (implementer) and `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) go in `.sandcastle/.env`. Set `gitIdentity` in `afk.config.json` to the implementer bot's name + email: implement, heal and conflict-resolve all commit as it (otherwise each phase inherits whatever git identity the host clone has). The image also disables Claude Code's `Co-Authored-By` trailer. The reviewer token goes in `.sandcastle/.env.review` (host-only): `FORGE_REVIEW_TOKEN` = reviewer. **It must NOT go in `.sandcastle/.env`** — that file is injected into every agent sandbox, so a reviewer token there would let the implementer approve its own PR; the loop refuses to start if it finds one there.
+
+Fine-grained PAT permissions, derived from the `gh` calls each `bin/forge` verb makes (Metadata: Read is always included):
+
+| Permission | Access | Needed by |
+|---|---|---|
+| Metadata | Read | every call; `issue-discussion`'s collaborator-permission check (`repos/…/collaborators/<login>/permission`) |
+| Contents | Read and write | `git push` from the sandbox (branch credential set by `git-setup`), `pr-merge` (`gh pr merge --squash --delete-branch`) |
+| Issues | Read and write | `issue-list`, `issue-view`, `issue-comments`, `issue-discussion` (read); `issue-create`, `issue-edit`, `issue-close`, `issue-comment` (write) |
+| Pull requests | Read and write | `pr-list`, `pr-view`, `pr-diff`, `pr-review-gate`, `pr-feedback`, `pr-has-conflicts`, `pr-head-exists`, the `*-count` verbs, `pr-pipeline`'s head SHA (read); `pr-create`, `pr-comment`, `pr-label`, `pr-close`, `pr-merge`, the `*-mark` verbs (write) |
+| Actions | Read and write | `pr-pipeline` (workflow runs for the head SHA), `pr-pipeline-failed-jobs`, `pr-pipeline-failures` (`gh run list/view`) (read); `pr-pipeline-retry` (`gh run rerun`) (write) |
+| Commit statuses | Read | `pr-pipeline` (the head commit's legacy statuses) |
+
+The **reviewer** token (`FORGE_REVIEW_TOKEN`) is only used for `pr-approve --as-reviewer`, so Metadata: Read and Pull requests: Read and write are enough for it. `whoami` (`gh api user`) needs no repository permission.
+
+**Checks can't be granted to a fine-grained token.** `pr-pipeline` first reads the PR's status-check rollup (which includes check runs, so needs Checks); when GitHub answers "Resource not accessible by personal access token", it falls back to the Actions workflow runs for the head commit (latest attempt of each workflow) plus the commit's legacy statuses (#101). Check runs posted by GitHub Apps *other than* Actions are only visible through the rollup, so with a fine-grained token they don't gate the merge. Use branch protection's required checks for those. A classic token with `repo` scope (or a GitHub App) reads the rollup directly, but grants far broader access than a sandboxed agent should hold.
 
 **GitLab:** create two **project access tokens** (or bot users) with `api` + `write_repository`, roles Developer/Maintainer. `GITLAB_TOKEN` (implementer) goes in `.sandcastle/.env`; `FORGE_REVIEW_TOKEN` (reviewer) goes in `.sandcastle/.env.review` (host-only, for the same reason as GitHub above — never in `.env`).
 

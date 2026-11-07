@@ -531,13 +531,42 @@ case "$verb" in
   pr-pipeline)  # -> {status, id}; status in success|running|pending|failed|canceled|skipped|none
     [[ -n "$NUM" ]] || die "pr-pipeline needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      # VERIFY (gh): roll up the status-check rollup
-      gh pr view "$NUM" --json statusCheckRollup,headRefOid | jq '
+      # VERIFY (gh): roll up the status-check rollup when the token can read it (classic token,
+      # GitHub App). The rollup includes check runs, which need the Checks permission, and a
+      # fine-grained PAT can't be granted that (#101): gh then fails "Resource not accessible".
+      rerr="$(mktemp)"
+      if roll="$(gh pr view "$NUM" --json statusCheckRollup,headRefOid 2>"$rerr")"; then
+        rm -f "$rerr"
+        jq '
         (.statusCheckRollup // []) as $c | { id: .headRefOid, status: (
           if ($c|length)==0 then "none"
           elif ($c|any(((.conclusion // "")) as $x | ($x=="FAILURE" or $x=="TIMED_OUT" or $x=="CANCELLED" or $x=="STARTUP_FAILURE"))) then "failed"
           elif ($c|any(((.status // "")) as $x | ($x=="IN_PROGRESS" or $x=="QUEUED" or $x=="PENDING" or $x=="WAITING"))) then "running"
+          else "success" end) }' <<<"$roll"
+      elif grep -qi 'resource not accessible' "$rerr"; then
+        rm -f "$rerr"
+        # Fallback: the Actions workflow runs for the head SHA (Actions: Read) plus the commit's
+        # legacy statuses (Commit statuses: Read). Check runs from apps OTHER than Actions are
+        # only visible through the rollup, so this fallback can't see them.
+        sha="$(gh pr view "$NUM" --json headRefOid -q .headRefOid)"
+        [[ -n "$sha" ]] || die "pr-pipeline: PR $NUM has no head SHA"
+        # Every page; only runs ON this SHA (not e.g. merge_group runs on another SHA); the latest
+        # attempt of each workflow (a newer run, or a re-run's higher run_attempt, supersedes).
+        runs="$(gh api --paginate "repos/{owner}/{repo}/actions/runs?head_sha=$sha&per_page=100" \
+          | jq -s --arg sha "$sha" '[.[].workflow_runs[]? | select(.head_sha == $sha)]
+              | group_by(.workflow_id) | map(max_by([.id, (.run_attempt // 1)]))')"
+        stats="$(gh api --paginate "repos/{owner}/{repo}/commits/$sha/status?per_page=100" \
+          | jq -s '[.[].statuses[]?]')"
+        jq -n --arg sha "$sha" --argjson r "$runs" --argjson s "$stats" '{ id: $sha, status: (
+          if ($r|length)==0 and ($s|length)==0 then "none"
+          elif ($r|any(.status=="completed" and ((.conclusion // "") as $x | $x=="failure" or $x=="timed_out" or $x=="cancelled" or $x=="startup_failure")))
+            or ($s|any(.state=="failure" or .state=="error")) then "failed"
+          elif ($r|any(.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="pending" or .status=="requested"))
+            or ($s|any(.state=="pending")) then "running"
           else "success" end) }'
+      else
+        cat "$rerr" >&2; rm -f "$rerr"; exit 1
+      fi
     else
       read -r pid iid _ < <(gl_ctx "$NUM")
       glab api "projects/$pid/merge_requests/$iid" | jq '
