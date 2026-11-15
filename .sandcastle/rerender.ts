@@ -43,12 +43,22 @@ export type RerenderDeps = {
   persistedInputs: () => string[];
   /** Restore inputs, run renderCmd at `head` in the sandbox, publish the images at `head`. */
   renderAndPublish: () => Promise<{ exitCode: number; output: string }>;
+  /**
+   * Copy the screenshots published for `from` to the current head; returns how many files. Tried
+   * before a live render when the PR's UI is unchanged since `from`: the images a reviewer saw
+   * still show this PR's UI, and a copy needs no sandbox, no render inputs, and can't fail on an
+   * unrelated render problem. Throws if there is nothing to copy. Omit to always re-render.
+   */
+  carryForward?: (from: string) => number;
   /** Re-run the gate after publishing. */
   recheck: () => UiGate;
   log: (m: string) => void;
 };
 
-export type RerenderResult = { ok: true; gate: UiGate } | { ok: false; reason: string };
+export type RerenderResult =
+  | { ok: true; gate: UiGate; via: "carried"; from: string }
+  | { ok: true; gate: UiGate; via: "rendered" }
+  | { ok: false; reason: string };
 
 const lastLine = (s: string): string =>
   s.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "(no output)";
@@ -64,6 +74,19 @@ export async function rerenderBeforeEscalating(pr: number, gate: Blocked, d: Rer
   if (!basis) {
     return { ok: false, reason: `${gate.reason} Not re-rendered automatically: this PR's own UI files changed since its last render (${older[0].slice(0, 8)}), so the new render needs a reviewer.` };
   }
+  if (d.carryForward) {
+    try {
+      const n = d.carryForward(basis);
+      const g = d.recheck();
+      if (!(g.required && g.blocked)) {
+        d.log(`PR #${pr}: UI unchanged since the render at ${basis.slice(0, 8)}; only the head moved (${d.head.slice(0, 8)}) -> carried ${n} screenshot file(s) forward`);
+        return { ok: true, gate: g, via: "carried", from: basis };
+      }
+      d.log(`PR #${pr}: carried the render at ${basis.slice(0, 8)} forward, but the gate is still blocked (${g.reason}) -> re-rendering`);
+    } catch (e) {
+      d.log(`PR #${pr}: could not carry the render at ${basis.slice(0, 8)} forward (${lastLine((e as Error).message)}) -> re-rendering`);
+    }
+  }
   if (d.inputsConfigured && !d.persistedInputs().length) {
     return { ok: false, reason: `${gate.reason} Re-render not attempted: \`ui.renderInputs\` is configured but there is no render spec to replay (nothing published under ${renderInputsPrefix(pr)}).` };
   }
@@ -77,7 +100,7 @@ export async function rerenderBeforeEscalating(pr: number, gate: Blocked, d: Rer
   }
   const g = d.recheck();
   if (g.required && g.blocked) return { ok: false, reason: `Re-rendered at ${d.head.slice(0, 8)}, but the gate is still blocked: ${g.reason}` };
-  return { ok: true, gate: g };
+  return { ok: true, gate: g, via: "rendered" };
 }
 
 // --- live pieces ------------------------------------------------------------------------------
@@ -116,6 +139,8 @@ type Run = (cmd: string, cwd: string) => string;
 // committed as the implement identity). Throws if there is nothing to publish.
 export const publishArtifacts = (o: {
   repo: string; artifactBranch: string; pr: number; sha: string; srcDir: string; identity: GitIdentity; run?: Run;
+  /** Commit subject; defaults to the loop re-render one. */
+  message?: string;
 }): number => {
   const run = o.run ?? sh;
   const files = existsSync(o.srcDir) ? readdirSync(o.srcDir) : [];
@@ -134,13 +159,42 @@ export const publishArtifacts = (o: {
     cpSync(o.srcDir, dest, { recursive: true });
     const as = `-c user.name=${shq(o.identity.name)} -c user.email=${shq(o.identity.email)}`;
     run("git add -A", tmp);
-    run(`git ${as} commit -q -m ${shq(`artifacts: pr-${o.pr} @ ${o.sha} (loop re-render)`)}`, tmp);
+    run(`git ${as} commit -q -m ${shq(o.message ?? `artifacts: pr-${o.pr} @ ${o.sha} (loop re-render)`)}`, tmp);
     try { run(`git push -q origin ${shq(`HEAD:refs/heads/${o.artifactBranch}`)}`, tmp); }
     catch {
       // Another loop/agent published to the artifact branch at the same moment: rebase once, retry.
       run(`git ${as} pull -q --rebase origin ${shq(o.artifactBranch)}`, tmp); // rebase re-commits: needs the identity
       run(`git push -q origin ${shq(`HEAD:refs/heads/${o.artifactBranch}`)}`, tmp);
     }
+    return files.length;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+};
+
+// Copy the screenshots published for <from> to <artifactBranch>:pr-<n>/<to>/ (same files, byte for
+// byte), from the HOST. Used when the PR's UI is unchanged since <from>, so those images still show
+// it. Returns the number of files copied; throws if <from> has none.
+export const carryForwardArtifacts = (o: {
+  repo: string; artifactBranch: string; pr: number; from: string; to: string; identity: GitIdentity; run?: Run;
+}): number => {
+  const run = o.run ?? sh;
+  const ref = `refs/remotes/origin/${o.artifactBranch}`;
+  run(`git fetch -q origin ${shq(`+refs/heads/${o.artifactBranch}:${ref}`)}`, o.repo);
+  const prefix = artifactPrefix(o.pr, o.from);
+  const files = run(`git ls-tree -r --name-only ${shq(ref)} -- ${shq(prefix)}`, o.repo).split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!files.length) throw new Error(`no screenshots published under ${o.artifactBranch}:${prefix}`);
+  const tmp = mkdtempSync(join(tmpdir(), "afk-carry-"));
+  try {
+    const tarball = join(tmp, "src.tar"), dir = join(tmp, "src");
+    mkdirSync(dir);
+    // Two steps, not a pipe: a failing `git archive` must not be masked by tar's exit status.
+    run(`git archive --format=tar -o ${shq(tarball)} ${shq(ref)} ${shq(prefix)}`, o.repo);
+    run(`tar -xf ${shq(tarball)} --strip-components=2 -C ${shq(dir)}`, o.repo);
+    publishArtifacts({
+      repo: o.repo, artifactBranch: o.artifactBranch, pr: o.pr, sha: o.to, srcDir: dir, identity: o.identity, run,
+      message: `artifacts: pr-${o.pr} @ ${o.to} (carried forward from ${o.from.slice(0, 8)}: UI unchanged)`,
+    });
     return files.length;
   } finally {
     rmSync(tmp, { recursive: true, force: true });

@@ -14,7 +14,7 @@ if (!existsSync(join(ROOT, "afk.config.json")))
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 
-const { rerenderBeforeEscalating, publishArtifacts, uiFilesUnchanged, renderCommand, prUiFilesAt } = await import("./rerender.js");
+const { rerenderBeforeEscalating, publishArtifacts, carryForwardArtifacts, uiFilesUnchanged, renderCommand, prUiFilesAt } = await import("./rerender.js");
 const { implementUiBlock, renderedHeads, persistedRenderInputs, uiGate } = await import("./ui.js");
 type Deps = Parameters<typeof rerenderBeforeEscalating>[2];
 type Blocked = Parameters<typeof rerenderBeforeEscalating>[1];
@@ -253,5 +253,79 @@ test("#19 bound, heal that REVERTS a UI file: the union of UI files at render an
     assert.equal(uiFilesUnchanged({ repo: w, files: now, a: rendered, b: head }), true, "current-diff-only would wrongly say unchanged");
     const union = [...new Set([...now, ...prUiFilesAt({ repo: w, base: "main", sha: rendered, globs })])];
     assert.equal(uiFilesUnchanged({ repo: w, files: union, a: rendered, b: head }), false, "the union sees B changed");
+  } finally { fx.cleanup(); }
+});
+
+// --- carry forward instead of re-rendering (#3544 in the consumer) ---------------------------
+// When the PR's own UI files are byte-identical at an already-rendered head, the screenshots a
+// reviewer saw still show this PR's UI: copy them to the new head instead of booting a render
+// (which needs uncommitted inputs and can fail for reasons unrelated to the PR).
+
+test("UI unchanged + carryForward available → screenshots carried from the rendered head, no render, gate passes", async () => {
+  const carried: string[] = [];
+  const d = deps({ inputsConfigured: false, persistedInputs: () => [], carryForward: (from: string) => { carried.push(from); return 8; } });
+  const r = await rerenderBeforeEscalating(2630, missing, d);
+  assert.equal(r.ok, true);
+  assert.equal(r.ok === true ? r.via : "", "carried");
+  assert.equal(r.ok === true && r.via === "carried" ? r.from : "", OLD);
+  assert.deepEqual(carried, [OLD]);
+  assert.equal(d.renders, 0);
+});
+
+test("carry-forward needs no render spec: renderInputs configured but none persisted → still carried, not escalated", async () => {
+  const d = deps({ persistedInputs: () => [], carryForward: () => 8 });
+  const r = await rerenderBeforeEscalating(2630, missing, d);
+  assert.equal(r.ok, true);
+  assert.equal(d.renders, 0);
+});
+
+test("carry-forward fails → falls back to the live re-render", async () => {
+  const d = deps({ carryForward: () => { throw new Error("the render wrote nothing"); } });
+  const r = await rerenderBeforeEscalating(2630, missing, d);
+  assert.equal(r.ok, true);
+  assert.equal(r.ok === true ? r.via : "", "rendered");
+  assert.equal(d.renders, 1);
+});
+
+test("carried but the gate is still blocked → falls back to the live re-render", async () => {
+  let checks = 0;
+  const pass = { required: true as const, blocked: false as const, files: ["apps/web/App.tsx"], artifacts: ["pr-2630/89caa33f/a.png"] };
+  const d = deps({ carryForward: () => 8, recheck: () => (++checks === 1 ? { ...missing, reason: "still nothing" } : pass) });
+  const r = await rerenderBeforeEscalating(2630, missing, d);
+  assert.equal(r.ok, true);
+  assert.equal(d.renders, 1);
+});
+
+test("#19 kept with carry-forward: the PR's own UI changed since its last render → escalated, nothing carried", async () => {
+  let carried = 0;
+  const d = deps({ uiUnchangedSince: () => false, carryForward: () => ++carried });
+  const r = await rerenderBeforeEscalating(2630, missing, d);
+  assert.equal(r.ok, false);
+  assert.equal(carried, 0);
+  assert.equal(d.renders, 0);
+});
+
+test("carryForwardArtifacts (real git): copies pr-<n>/<from>/ to pr-<n>/<to>/ and the new head counts as rendered", () => {
+  const fx = repo();
+  try {
+    const src = join(fx.dir, "shots"); mkdirSync(join(src, "sub"), { recursive: true });
+    writeFileSync(join(src, "desktop-dark.png"), "png-a"); writeFileSync(join(src, "sub", "report.json"), "{}");
+    publishArtifacts({ repo: fx.host, artifactBranch: "afk/artifacts", pr: 7, sha: OLD, srcDir: src, identity: { name: "dev-bot", email: "d@b" } });
+    const n = carryForwardArtifacts({ repo: fx.host, artifactBranch: "afk/artifacts", pr: 7, from: OLD, to: NEW, identity: { name: "dev-bot", email: "d@b" } });
+    assert.equal(n, 2);
+    assert.equal(git(fx.origin, `show afk/artifacts:pr-7/${NEW}/desktop-dark.png`), "png-a");
+    assert.equal(git(fx.origin, `show afk/artifacts:pr-7/${NEW}/sub/report.json`), "{}");
+    assert.match(git(fx.origin, "log -1 --format=%s afk/artifacts"), new RegExp(`carried forward from ${OLD.slice(0, 8)}`));
+    git(fx.host, "fetch -q origin");
+    assert.deepEqual(renderedHeads(7, "afk/artifacts", hostRun(fx.host)).sort(), [OLD, NEW].sort());
+  } finally { fx.cleanup(); }
+});
+
+test("carryForwardArtifacts refuses when the source head has no screenshots", () => {
+  const fx = repo();
+  try {
+    const src = join(fx.dir, "shots"); mkdirSync(src); writeFileSync(join(src, "a.png"), "png");
+    publishArtifacts({ repo: fx.host, artifactBranch: "afk/artifacts", pr: 7, sha: OLD, srcDir: src, identity: { name: "b", email: "b@b" } });
+    assert.throws(() => carryForwardArtifacts({ repo: fx.host, artifactBranch: "afk/artifacts", pr: 8, from: OLD, to: NEW, identity: { name: "b", email: "b@b" } }));
   } finally { fx.cleanup(); }
 });
