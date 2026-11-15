@@ -7,7 +7,7 @@ import { shouldRunTriage, sweepBlockedIssues, isIssueClosed, TRIAGE_MARKER } fro
 import { shouldStop, stopSentinelExists, clearStopSentinel, sleepUnlessStopped } from "./stop.js";
 import { presses, shieldSigint, shouldSupervise, superviseInOwnGroup, parentGone, CHILD_ENV } from "./soft-stop.js";
 import { uiGate, implementUiBlock, reviewUiBlock, artifactBranch, artifactPrefix, headShaOf, renderedHeads, persistedRenderInputs } from "./ui.js";
-import { rerenderBeforeEscalating, liveRenderAndPublish, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
+import { rerenderBeforeEscalating, liveRenderAndPublish, carryForwardArtifacts, uiFilesUnchanged, prUiFilesAt } from "./rerender.js";
 import { handleConflict, mechanicalMerge, baseTip, branchContains, baseMergeOverlap, type ConflictResult } from "./conflicts.js";
 import { healUntilPushed, type HealPushDeps } from "./heal.js";
 import { priorFindingsBlock, quote, changesRequestedAction } from "./review-gate.js";
@@ -598,6 +598,9 @@ async function main(): Promise<void> {
                     hooks: { sandbox: { onSandboxReady: sandboxReadyHooks(cfg.install, cfg.setupCommands ?? [], null) } },
                     identity: requireGitIdentity(cfg.gitIdentity),
                   }),
+                  carryForward: (from) => carryForwardArtifacts({
+                    repo: ROOT, artifactBranch: ab, pr: pr.number, from, to: head, identity: requireGitIdentity(cfg.gitIdentity),
+                  }),
                   recheck: () => uiGate(pr.number, branch, ui),
                   log,
                 });
@@ -609,8 +612,9 @@ async function main(): Promise<void> {
                 }
                 vg = rr.gate;
                 const n = vg.required ? vg.artifacts.length : 0;
-                forge.prComment(pr.number, "--body",
-                  `AFK: the head moved to ${head.slice(0, 8)} after the last render, so the loop re-ran \`${ui.renderCmd}\` there: ${n} screenshot(s) at \`${ab}:${artifactPrefix(pr.number, head)}\`.`);
+                forge.prComment(pr.number, "--body", rr.via === "carried"
+                  ? `AFK: the head moved to ${head.slice(0, 8)} after the last render, but this PR's UI files are byte-identical to the render at ${rr.from.slice(0, 8)}, so the loop carried those screenshots forward: ${n} at \`${ab}:${artifactPrefix(pr.number, head)}\`.`
+                  : `AFK: the head moved to ${head.slice(0, 8)} after the last render, so the loop re-ran \`${ui.renderCmd}\` there: ${n} screenshot(s) at \`${ab}:${artifactPrefix(pr.number, head)}\`.`);
               }
               const pl = forge.prPipeline(pr.number);
               if (["success", "skipped", "none"].includes(pl.status)) {
