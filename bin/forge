@@ -76,6 +76,23 @@ gl_ctx() {
   echo "$pid $iid $pip"
 }
 
+# github: the FAILED workflow run ids for PR $1's head SHA, one per line, oldest first. Latest
+# attempt per workflow (a newer run, or a re-run's higher run_attempt, supersedes); runs on other
+# SHAs (e.g. merge_group) don't count. Not `gh run list --branch … -L 1`: that is the newest run of
+# ANY workflow, and CI plus a second workflow start in the same second, so it often picked the
+# green one and a "retry" reran nothing. Same Actions query as pr-pipeline's fallback (Actions: Read).
+gh_failed_runs() {
+  local sha
+  sha="$(gh pr view "$1" --json headRefOid -q .headRefOid)"
+  [[ -n "$sha" ]] || die "PR $1 has no head SHA"
+  gh api --paginate "repos/{owner}/{repo}/actions/runs?head_sha=$sha&per_page=100" \
+    | jq -rs --arg sha "$sha" '[.[].workflow_runs[]? | select(.head_sha == $sha)]
+        | group_by(.workflow_id) | map(max_by([.id, (.run_attempt // 1)]))
+        | map(select(.status == "completed" and ((.conclusion // "") as $c
+            | $c == "failure" or $c == "timed_out" or $c == "cancelled" or $c == "startup_failure")))
+        | sort_by(.id) | .[].id'
+}
+
 # --- transient-error retry --------------------------------------------------
 # GitHub/GitLab intermittently return transient infra errors (5xx gateway,
 # service-unavailable, timeouts, secondary rate limits). Retry READ verbs with
@@ -581,8 +598,10 @@ case "$verb" in
   pr-pipeline-retry)  # retry failed/canceled jobs in the head pipeline
     [[ -n "$NUM" ]] || die "pr-pipeline-retry needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
-      [[ -n "$rid" ]] && gh run rerun "$rid" --failed && echo "rerun $rid" || echo "(no run to retry)"
+      rids="$(gh_failed_runs "$NUM")"
+      if [[ -z "$rids" ]]; then echo "(no run to retry)"; else
+        while read -r rid; do gh run rerun "$rid" --failed && echo "rerun $rid"; done <<<"$rids"
+      fi
     else
       read -r pid iid pip < <(gl_ctx "$NUM")
       [[ -n "$pip" ]] && glab api --method POST "projects/$pid/pipelines/$pip/retry" >/dev/null && echo "retried pipeline $pip" || echo "(no pipeline to retry)"
@@ -591,8 +610,9 @@ case "$verb" in
   pr-pipeline-failed-jobs)  # newline-separated failed job names (for the flaky-job check)
     [[ -n "$NUM" ]] || die "pr-pipeline-failed-jobs needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
-      [[ -n "$rid" ]] && gh run view "$rid" --json jobs | jq -r '.jobs[] | select(.conclusion=="failure") | .name' || true
+      for rid in $(gh_failed_runs "$NUM"); do
+        gh run view "$rid" --json jobs | jq -r '.jobs[] | select(.conclusion=="failure") | .name'
+      done
     else
       read -r pid iid pip < <(gl_ctx "$NUM")
       [[ -n "$pip" ]] && glab api "projects/$pid/pipelines/$pip/jobs?scope=failed" | jq -r '.[].name' || true
@@ -601,8 +621,10 @@ case "$verb" in
   pr-pipeline-failures)  # failed job names + trace tails, for the heal prompt
     [[ -n "$NUM" ]] || die "pr-pipeline-failures needs <number>"
     if [[ "$PLATFORM" == github ]]; then
-      rid="$(gh run list --branch "$(gh pr view "$NUM" --json headRefName -q .headRefName)" --json databaseId -L 1 -q '.[0].databaseId' 2>/dev/null)"
-      [[ -n "$rid" ]] && gh run view "$rid" --log-failed 2>/dev/null | tail -200 || echo "(no failed logs)"
+      rids="$(gh_failed_runs "$NUM")"
+      if [[ -z "$rids" ]]; then echo "(no failed logs)"; else
+        while read -r rid; do gh run view "$rid" --log-failed 2>/dev/null | tail -200; done <<<"$rids"
+      fi
     else
       read -r pid iid pip < <(gl_ctx "$NUM")
       if [[ -z "$pip" ]]; then echo "(no pipeline)"; else
